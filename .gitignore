@@ -3,7 +3,7 @@
 .swiftpm/
 *.xcodeproj
 *.xcworkspace
-SwiftViewer.app
+*.app
 TESTFILES/
 *.jpg
 *.png
