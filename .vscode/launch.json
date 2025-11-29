@@ -1,0 +1,40 @@
+{
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SwiftViewer}",
+            "name": "Debug SwiftViewer",
+            "program": "${workspaceFolder:SwiftViewer}/.build/debug/SwiftViewer",
+            "preLaunchTask": "swift: Build Debug SwiftViewer"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SwiftViewer}",
+            "name": "Release SwiftViewer",
+            "program": "${workspaceFolder:SwiftViewer}/.build/release/SwiftViewer",
+            "preLaunchTask": "swift: Build Release SwiftViewer"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SwiftViewer}",
+            "name": "Debug AdvancedCopyApp",
+            "program": "${workspaceFolder:SwiftViewer}/.build/debug/AdvancedCopyApp",
+            "preLaunchTask": "swift: Build Debug AdvancedCopyApp"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SwiftViewer}",
+            "name": "Release AdvancedCopyApp",
+            "program": "${workspaceFolder:SwiftViewer}/.build/release/AdvancedCopyApp",
+            "preLaunchTask": "swift: Build Release AdvancedCopyApp"
+        }
+    ]
+}
