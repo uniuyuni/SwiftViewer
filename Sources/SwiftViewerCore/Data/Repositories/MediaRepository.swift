@@ -3,20 +3,20 @@ import CoreData
 import AppKit
 import ImageIO
 
-protocol MediaRepositoryProtocol {
+public protocol MediaRepositoryProtocol {
     func addMediaItem(from url: URL, to catalog: Catalog) async throws -> MediaItem
     func fetchMediaItems(in catalog: Catalog) throws -> [MediaItem]
     func importMediaItems(from urls: [URL], to catalogID: NSManagedObjectID) async throws
 }
 
-class MediaRepository: MediaRepositoryProtocol {
+public class MediaRepository: MediaRepositoryProtocol {
     private let context: NSManagedObjectContext
     
-    init(context: NSManagedObjectContext = PersistenceController.shared.container.viewContext) {
+    public init(context: NSManagedObjectContext = PersistenceController.shared.container.viewContext) {
         self.context = context
     }
     
-    func addMediaItem(from url: URL, to catalog: Catalog) async throws -> MediaItem {
+    public func addMediaItem(from url: URL, to catalog: Catalog) async throws -> MediaItem {
         // Use the injected context
         let context = self.context
         
@@ -25,9 +25,15 @@ class MediaRepository: MediaRepositoryProtocol {
         // Since this is async now, we should ensure we are on the correct actor/queue for the context.
         // If context is viewContext, we should be on MainActor.
         
+        let catalogID = catalog.objectID
         let metadata = await ExifReader.shared.readExif(from: url)
         
         return try await context.perform {
+            // Fetch catalog inside context
+            guard let catalog = try? context.existingObject(with: catalogID) as? Catalog else {
+                throw NSError(domain: "MediaRepository", code: 404, userInfo: [NSLocalizedDescriptionKey: "Catalog not found"])
+            }
+            
             let item = MediaItem(context: context)
             item.id = UUID()
             item.originalPath = url.path
@@ -84,34 +90,13 @@ class MediaRepository: MediaRepositoryProtocol {
     }
     
     // New method for background import
-    func importMediaItems(from urls: [URL], to catalogID: NSManagedObjectID) async throws {
+    public func importMediaItems(from urls: [URL], to catalogID: NSManagedObjectID) async throws {
         let container = PersistenceController.shared.container
         let allowedExtensions = FileConstants.allAllowedExtensions
         
         // 1. Scan files (I/O) - Can be done in parallel
         // We'll do a simple scan first
-        var filesToImport: [URL] = []
-        
-        for url in urls {
-            var isDir: ObjCBool = false
-            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) {
-                if isDir.boolValue {
-                    if let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
-                        for case let fileURL as URL in enumerator {
-                            let ext = fileURL.pathExtension.lowercased()
-                            if allowedExtensions.contains(ext) {
-                                filesToImport.append(fileURL)
-                            }
-                        }
-                    }
-                } else {
-                    let ext = url.pathExtension.lowercased()
-                    if allowedExtensions.contains(ext) {
-                        filesToImport.append(url)
-                    }
-                }
-            }
-        }
+        let filesToImport = scanFiles(from: urls, allowedExtensions: Set(allowedExtensions))
         
         // 2. Read Exif Data (Async I/O)
         // We do this BEFORE entering the Core Data context to avoid blocking the DB thread
@@ -199,7 +184,7 @@ class MediaRepository: MediaRepositoryProtocol {
         }
     }
     
-    func fetchMediaItems(in catalog: Catalog) throws -> [MediaItem] {
+    public func fetchMediaItems(in catalog: Catalog) throws -> [MediaItem] {
         let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
         request.predicate = NSPredicate(format: "catalog == %@", catalog)
         request.sortDescriptors = [NSSortDescriptor(keyPath: \MediaItem.importDate, ascending: false)]
@@ -216,5 +201,31 @@ class MediaRepository: MediaRepositoryProtocol {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
         return NSImage(cgImage: cgImage, size: NSSize(width: CGFloat(cgImage.width), height: CGFloat(cgImage.height)))
+    }
+    
+    private func scanFiles(from urls: [URL], allowedExtensions: Set<String>) -> [URL] {
+        var filesToImport: [URL] = []
+        
+        for url in urls {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) {
+                if isDir.boolValue {
+                    if let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
+                        for case let fileURL as URL in enumerator {
+                            let ext = fileURL.pathExtension.lowercased()
+                            if allowedExtensions.contains(ext) {
+                                filesToImport.append(fileURL)
+                            }
+                        }
+                    }
+                } else {
+                    let ext = url.pathExtension.lowercased()
+                    if allowedExtensions.contains(ext) {
+                        filesToImport.append(url)
+                    }
+                }
+            }
+        }
+        return filesToImport
     }
 }

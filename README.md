@@ -26,10 +26,7 @@ SwiftViewer is a high-performance media viewer for macOS, designed for photograp
   - **Context Menu**: Quick access to Rating, Color Labels, and "Move to Trash".
   - **Collections**: Group images virtually without moving files.
 
-- **SwiftCopy (Advanced Copy Utility)**:
-  - A dedicated tool for copying files with date-based organization.
-  - Conflict detection and resolution.
-  - Preview of copy operations.
+
 
 ## Requirements
 
@@ -46,11 +43,12 @@ This project includes shell scripts to build the applications easily.
 ```
 This will create `SwiftViewer.app` in the project root.
 
-### Build AdvancedCopy (Copy Utility)
+### Testing
+To run the automated test suite:
 ```bash
-./create_copy_app.sh
+./run_tests.sh
 ```
-This will create `AdvancedCopy.app` in the project root.
+This executes unit tests for core components (Repositories, ExifReader, etc.).
 
 ## Development
 

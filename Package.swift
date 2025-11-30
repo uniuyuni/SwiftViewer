@@ -26,10 +26,6 @@ let package = Package(
                 .process("Assets.xcassets")
             ]
         ),
-        .executableTarget(
-            name: "AdvancedCopyApp",
-            dependencies: ["SwiftViewerCore"]
-        ),
         .testTarget(
             name: "SwiftViewerTests",
             dependencies: ["SwiftViewerCore"]

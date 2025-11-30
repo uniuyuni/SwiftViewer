@@ -287,6 +287,14 @@ struct ZoomableImageView: View {
                 .keyboardShortcut(.space, modifiers: [])
                 .hidden()
             )
+            // Ensure Space key works even when focused on this view
+            .background(
+                Button("Quick Look") {
+                    QuickLookService.shared.toggleQuickLook(for: [url])
+                }
+                .keyboardShortcut(.space, modifiers: [])
+                .hidden()
+            )
         }
     }
 }

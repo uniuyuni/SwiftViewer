@@ -261,7 +261,19 @@ struct LocationsSection: View {
     @Binding var showRenameAlert: Bool
     
     var body: some View {
-        Section("Locations") {
+        Section(header: HStack {
+            Text("Locations")
+            Spacer()
+            Button {
+                Task {
+                    await viewModel.loadRootFolders()
+                }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.plain)
+            .help("Refresh Devices")
+        }) {
             ForEach(viewModel.rootFolders) { folder in
                 FolderNodeView(folder: folder, viewModel: viewModel)
             }

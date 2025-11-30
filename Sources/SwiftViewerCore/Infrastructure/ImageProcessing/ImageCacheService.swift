@@ -7,8 +7,8 @@ class ImageCacheService {
     private let cache = NSCache<NSString, NSImage>()
     
     private init() {
-        cache.countLimit = 500 // Cache up to 500 images
-        cache.totalCostLimit = 100 * 1024 * 1024 // 100 MB
+        cache.countLimit = 2000 // Cache up to 2000 images
+        cache.totalCostLimit = 500 * 1024 * 1024 // 500 MB
     }
     
     func image(forKey key: String) -> NSImage? {

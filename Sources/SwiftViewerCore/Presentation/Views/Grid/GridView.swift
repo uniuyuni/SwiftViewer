@@ -29,6 +29,7 @@ struct GridView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor)) // Ensure no transparency gaps
             // Keyboard handling at root level
             .background(
                 Button("") {
@@ -162,7 +163,7 @@ struct GridView: View {
         ToolbarItem(placement: .primaryAction) {
             Menu {
                 Picker("Sort By", selection: $viewModel.sortOption) {
-                    ForEach(MainViewModel.SortOption.allCases) { option in
+                    ForEach(MainViewModel.SortOption.allCases, id: \.self) { option in
                         Text(option.rawValue).tag(option)
                     }
                 }

@@ -3,7 +3,7 @@ import SwiftUI
 public struct MainWindow: View {
     @StateObject private var viewModel = MainViewModel()
     
-    @State private var detailWidth: CGFloat = 300
+    @State private var gridWidth: CGFloat = 400 // Default grid width
     
     public init() {}
     
@@ -61,41 +61,37 @@ public struct MainWindow: View {
             }
     }
 
-    
     private var mainContent: some View {
         NavigationSplitView(columnVisibility: $viewModel.columnVisibility) {
             SidebarView(viewModel: viewModel)
-        } content: {
-            ZStack(alignment: .leading) {
-                HStack(spacing: 0) {
-                    GridView(viewModel: viewModel)
-                        .frame(minWidth: 0, maxWidth: .infinity)
+        } detail: {
+            HStack(spacing: 0) {
+                GridView(viewModel: viewModel)
+                    .frame(minWidth: 100)
+                    .frame(maxWidth: viewModel.isPreviewVisible ? gridWidth : .infinity)
+                    .frame(width: viewModel.isPreviewVisible ? gridWidth : nil)
+                    .layoutPriority(viewModel.isPreviewVisible ? 0 : 1)
+                
+                if viewModel.isPreviewVisible {
+                    // Splitter for Preview
+                    DraggableSplitter(width: $gridWidth, isLeft: true)
                     
-                    if viewModel.isPreviewVisible {
-                        // Spacer for splitter width (1px visual)
-                        Color.clear.frame(width: 1)
-                        
-                        DetailView(viewModel: viewModel)
-                            .frame(width: detailWidth)
-                    }
-                    
-                    if viewModel.isInspectorVisible {
-                        // Inspector moved to detail block
-                    }
+                    DetailView(viewModel: viewModel)
+                        .frame(maxWidth: .infinity)
+                        .layoutPriority(1)
                 }
                 
-                // Splitter Overlay
-                if viewModel.isPreviewVisible {
-                    HStack(spacing: 0) {
-                        Spacer() // Push to right of GridView
-                        DraggableSplitter(width: $detailWidth)
-                        Spacer().frame(width: detailWidth) // Push left by detailWidth
-                    }
+                if viewModel.isInspectorVisible {
+                    // Divider or Splitter for Inspector?
+                    // For now, just a Divider-like visual or simple border
+                    Rectangle()
+                        .fill(Color(nsColor: .separatorColor))
+                        .frame(width: 1)
+                    
+                    InspectorView(viewModel: viewModel)
+                        .frame(width: 280) // Fixed width for Inspector
+                        .transition(.move(edge: .trailing))
                 }
-            }
-        } detail: {
-            if viewModel.isInspectorVisible {
-                InspectorView(viewModel: viewModel)
             }
         }
         .frame(minWidth: 500, minHeight: 400) // Reduced minWidth
@@ -193,6 +189,7 @@ public struct MainWindow: View {
 
 struct DraggableSplitter: View {
     @Binding var width: CGFloat
+    var isLeft: Bool = false // If true, resizing affects left pane width
     
     var body: some View {
         Rectangle()
@@ -201,7 +198,7 @@ struct DraggableSplitter: View {
             .overlay(
                 Rectangle()
                     .fill(Color.clear)
-                    .frame(width: 40) // Hit area increased to 40px
+                    .frame(width: 10) // Hit area
             )
             .zIndex(1) // Ensure it's above other content
             .onHover { inside in
@@ -214,10 +211,18 @@ struct DraggableSplitter: View {
             .gesture(
                 DragGesture()
                     .onChanged { value in
-                        let newWidth = width - value.translation.width
-                        // Clamp - Relaxed constraints
-                        if newWidth >= 100 && newWidth <= 2000 {
-                            width = newWidth
+                        if isLeft {
+                            let newWidth = width + value.translation.width
+                            // Clamp
+                             if newWidth >= 100 && newWidth <= 2000 {
+                                width = newWidth
+                            }
+                        } else {
+                            let newWidth = width - value.translation.width
+                            // Clamp
+                             if newWidth >= 100 && newWidth <= 2000 {
+                                width = newWidth
+                            }
                         }
                     }
             )

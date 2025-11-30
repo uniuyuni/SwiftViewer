@@ -1,20 +1,20 @@
 import Foundation
 
-struct FileItem: Identifiable, Hashable {
-    var id: URL { url }
-    let url: URL
-    let isDirectory: Bool
-    let name: String
-    let isAvailable: Bool
-    var isConflict: Bool = false
-    let uuid: UUID? // For Catalog items to access persistent cache
-    var colorLabel: String?
-    let fileCount: Int?
-    let creationDate: Date?
-    let modificationDate: Date?
-    let fileSize: Int64?
+public struct FileItem: Identifiable, Hashable {
+    public var id: URL { url }
+    public let url: URL
+    public let isDirectory: Bool
+    public let name: String
+    public let isAvailable: Bool
+    public var isConflict: Bool = false
+    public let uuid: UUID? // For Catalog items to access persistent cache
+    public var colorLabel: String?
+    public let fileCount: Int?
+    public let creationDate: Date?
+    public let modificationDate: Date?
+    public let fileSize: Int64?
     
-    init(url: URL, isDirectory: Bool, isAvailable: Bool = true, uuid: UUID? = nil, colorLabel: String? = nil, fileCount: Int? = nil, creationDate: Date? = nil, modificationDate: Date? = nil, fileSize: Int64? = nil) {
+    public init(url: URL, isDirectory: Bool, isAvailable: Bool = true, uuid: UUID? = nil, colorLabel: String? = nil, fileCount: Int? = nil, creationDate: Date? = nil, modificationDate: Date? = nil, fileSize: Int64? = nil) {
         self.url = url
         self.isDirectory = isDirectory
         self.name = url.lastPathComponent
@@ -28,19 +28,13 @@ struct FileItem: Identifiable, Hashable {
     }
     
     // Helper for backward compatibility if needed, or just convenience
-    static func == (lhs: FileItem, rhs: FileItem) -> Bool {
-        lhs.url == rhs.url &&
-        lhs.isDirectory == rhs.isDirectory &&
-        lhs.name == rhs.name &&
-        lhs.isAvailable == rhs.isAvailable &&
-        lhs.colorLabel == rhs.colorLabel &&
-        lhs.fileCount == rhs.fileCount &&
-        lhs.creationDate == rhs.creationDate &&
-        lhs.modificationDate == rhs.modificationDate &&
-        lhs.fileSize == rhs.fileSize
+    
+    public static func == (lhs: FileItem, rhs: FileItem) -> Bool {
+        return lhs.url == rhs.url && lhs.uuid == rhs.uuid
     }
     
-    func hash(into hasher: inout Hasher) {
+    public func hash(into hasher: inout Hasher) {
         hasher.combine(url)
+        hasher.combine(uuid)
     }
 }

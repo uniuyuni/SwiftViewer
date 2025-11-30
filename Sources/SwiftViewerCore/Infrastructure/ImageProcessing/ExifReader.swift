@@ -2,28 +2,28 @@ import Foundation
 import ImageIO
 import CoreGraphics
 
-struct ExifMetadata {
-    var cameraMake: String?
-    var cameraModel: String?
-    var lensModel: String?
-    var focalLength: Double?
-    var aperture: Double?
-    var shutterSpeed: String?
-    var iso: Int?
-    var dateTimeOriginal: Date?
-    var width: Int?
-    var height: Int?
-    var orientation: Int?
-    var rating: Int?
-    var colorLabel: String?
+public struct ExifMetadata {
+    public var cameraMake: String?
+    public var cameraModel: String?
+    public var lensModel: String?
+    public var focalLength: Double?
+    public var aperture: Double?
+    public var shutterSpeed: String?
+    public var iso: Int?
+    public var dateTimeOriginal: Date?
+    public var width: Int?
+    public var height: Int?
+    public var orientation: Int?
+    public var rating: Int?
+    public var colorLabel: String?
     // Extended fields
-    var meteringMode: String?
-    var flash: String?
-    var whiteBalance: String?
-    var exposureProgram: String?
-    var exposureCompensation: Double?
-    var software: String?
-    var rawProps: [String: Any]? // Dictionary for internal use, will be serialized
+    public var meteringMode: String?
+    public var flash: String?
+    public var whiteBalance: String?
+    public var exposureProgram: String?
+    public var exposureCompensation: Double?
+    public var software: String?
+    public var rawProps: [String: Any]? // Dictionary for internal use, will be serialized
 }
 
 class ExifReader {
