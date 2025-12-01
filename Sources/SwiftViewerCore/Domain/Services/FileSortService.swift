@@ -31,9 +31,17 @@ struct FileSortService {
                 result = file1.name.localizedStandardCompare(file2.name) == .orderedAscending
                 
             case .date:
-                // Priority: Exif Date > Modification Date > Creation Date
-                let date1 = metadataCache[file1.url]?.dateTimeOriginal ?? file1.modificationDate ?? file1.creationDate ?? Date.distantPast
-                let date2 = metadataCache[file2.url]?.dateTimeOriginal ?? file2.modificationDate ?? file2.creationDate ?? Date.distantPast
+                // Priority: 
+                // 1. Cached EXIF Date (dateTimeOriginal)
+                // 2. FileItem.creationDate (which is mapped to captureDate/EXIF in Catalog mode, or FS Creation in Folders mode)
+                // 3. FileItem.modificationDate (FS Modification)
+                // 4. Distant Past
+                
+                let exifDate1 = metadataCache[file1.url.standardizedFileURL]?.dateTimeOriginal
+                let exifDate2 = metadataCache[file2.url.standardizedFileURL]?.dateTimeOriginal
+                
+                let date1 = exifDate1 ?? file1.creationDate ?? file1.modificationDate ?? Date.distantPast
+                let date2 = exifDate2 ?? file2.creationDate ?? file2.modificationDate ?? Date.distantPast
                 
                 if date1 != date2 {
                     result = date1 < date2

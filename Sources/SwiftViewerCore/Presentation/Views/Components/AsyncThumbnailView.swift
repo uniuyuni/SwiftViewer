@@ -34,7 +34,8 @@ struct AsyncThumbnailView: View {
             // Debug Overlay Removed
         }
         .frame(width: size.width, height: size.height)
-        .task(id: url) {
+        // Update task identity to include orientation so we reload/re-rotate if it changes
+        .task(id: "\(url.path)_\(orientation ?? -1)") {
             await loadThumbnail()
         }
     }
@@ -51,55 +52,67 @@ struct AsyncThumbnailView: View {
         
         switch orientation {
         case 3, 4: return .degrees(180)
-        case 6, 5: return .degrees(90) // 6 is Right-Top (Rotated 90 CW). Rotate 90 to upright? No, if it's 90 CW, we need -90 to undo?
-                                       // Wait, user said "Rotation direction is reversed".
-                                       // Previous code was: case 6, 5: return .degrees(-90)
-                                       // So I should change it to 90.
-        case 8, 7: return .degrees(-90)  // 8 is Left-Bottom (Rotated 270 CW). Rotate -90 (or 270) to upright?
-                                         // Previous code was: case 8, 7: return .degrees(90)
-                                         // So I should change it to -90.
+        case 6, 5: return .degrees(90)
+        case 8, 7: return .degrees(-90)
         default: return .zero
         }
     }
     
     private func loadThumbnail() async {
-        isLoading = true
-        
-        // Load orientation if needed (for Copy Mode where it might be nil)
-        var currentOrientation = orientation
-        if currentOrientation == nil {
-            let ext = url.pathExtension.lowercased()
-            let isRaw = !["jpg", "jpeg", "png", "heic", "tiff", "gif", "webp"].contains(ext)
-            if isRaw {
-                // Read orientation from file (Fast path)
-                currentOrientation = await ExifReader.shared.readOrientation(from: url)
-            }
-        }
-        
-        // 1. Try Cache if ID is present
-        if let id = id, let cached = ThumbnailCacheService.shared.loadThumbnail(for: id) {
-             await MainActor.run {
-                 self.image = cached
-                 self.isLoading = false
+        // 1. Fast Path: Memory Cache (Main Thread)
+        // If we have an ID and it's in memory, show immediately.
+        if let id = id, let cached = ThumbnailCacheService.shared.loadFromMemory(for: id) {
+             self.image = cached
+             self.isLoading = false
+             // If orientation is provided, apply it.
+             // If not, we might be missing rotation for RAWs, but it's better than waiting.
+             // The background task can still run to refine it? No, that defeats the purpose.
+             // For Catalog items, orientation is usually known.
+             if let o = orientation {
+                 self.rotationAngle = self.angleForOrientation(o)
              }
              return
         }
         
-        // 2. Try Generator (File System)
-        let thumb = await ThumbnailGenerator.shared.generateThumbnail(for: url, size: size, orientation: currentOrientation)
+        isLoading = true
         
-        // 3. If Generator succeeded, and we have an ID, cache it?
-        // MediaRepository does caching on import.
-        // But if we are in Folder mode (no ID usually, unless we pass random UUID), we don't cache persistently?
-        // Correct. Persistent cache is for Catalog items.
+        let currentID = id
+        let currentURL = url
+        let inputOrientation = orientation
+        let targetSize = size
         
-        await MainActor.run {
-            self.image = thumb
-            self.isLoading = false
-            if self.loadedOrientation == nil {
-                self.loadedOrientation = currentOrientation
+        // Offload disk I/O and generation to background
+        let result = await Task.detached(priority: .userInitiated) { () -> (NSImage?, Int?) in
+            // Resolve orientation
+            var resolvedOrientation = inputOrientation
+            if resolvedOrientation == nil {
+                let ext = currentURL.pathExtension.lowercased()
+                let isRaw = !["jpg", "jpeg", "png", "heic", "tiff", "gif", "webp"].contains(ext)
+                if isRaw {
+                    resolvedOrientation = await ExifReader.shared.readOrientation(from: currentURL)
+                }
             }
-            self.rotationAngle = self.angleForOrientation(self.loadedOrientation ?? self.orientation)
-        }
+            
+            // 1. Try Cache
+            if let id = currentID, let cached = ThumbnailCacheService.shared.loadThumbnail(for: id) {
+                return (cached, resolvedOrientation)
+            }
+            
+            // 2. Generate
+            let thumb = await ThumbnailGenerator.shared.generateThumbnail(for: currentURL, size: targetSize, orientation: resolvedOrientation)
+            
+            // Cache if we have an ID
+            if let id = currentID, let generated = thumb {
+                ThumbnailCacheService.shared.saveThumbnail(image: generated, for: id)
+            }
+            
+            return (thumb, resolvedOrientation)
+        }.value
+        
+        // Update UI on Main Actor
+        self.image = result.0
+        self.loadedOrientation = result.1
+        self.rotationAngle = self.angleForOrientation(self.loadedOrientation ?? self.orientation)
+        self.isLoading = false
     }
 }

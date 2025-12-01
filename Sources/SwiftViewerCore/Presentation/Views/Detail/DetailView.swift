@@ -56,6 +56,7 @@ struct DetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(minWidth: 300)
         // Hidden button for Space key shortcut
         .background {
             Button("") {
@@ -275,8 +276,21 @@ struct ZoomableImageView: View {
                 
                 // 4. Offline: Try to load cached thumbnail
                 self.isOffline = true
-                if let id = itemID, let cached = ThumbnailCacheService.shared.loadThumbnail(for: id) {
-                    self.image = cached
+                if let id = itemID {
+                    // Try large preview first
+                    if let preview = ThumbnailCacheService.shared.loadThumbnail(for: id, type: .preview) {
+                        self.image = preview
+                        print("DetailView: Loaded cached PREVIEW for offline file: \(url.lastPathComponent)")
+                    } 
+                    // Fallback to standard thumbnail
+                    else if let cached = ThumbnailCacheService.shared.loadThumbnail(for: id, type: .thumbnail) {
+                        self.image = cached
+                        print("DetailView: Loaded cached thumbnail for offline file: \(url.lastPathComponent)")
+                    } else {
+                        print("DetailView: No cached thumbnail found for offline file: \(url.lastPathComponent) (ID: \(id))")
+                    }
+                } else {
+                    print("DetailView: No itemID provided for offline file: \(url.lastPathComponent)")
                 }
             }
             // Ensure Space key works even when focused on this view

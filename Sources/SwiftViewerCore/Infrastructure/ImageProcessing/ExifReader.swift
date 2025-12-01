@@ -2,7 +2,7 @@ import Foundation
 import ImageIO
 import CoreGraphics
 
-public struct ExifMetadata {
+public struct ExifMetadata: @unchecked Sendable {
     public var cameraMake: String?
     public var cameraModel: String?
     public var lensModel: String?
@@ -136,23 +136,7 @@ class ExifReader {
         }.value
     }
     
-    private func _readExif(from url: URL) -> ExifMetadata? {
-        // 1. Try ExifTool ONLY for RAW files (Performance optimization)
-        let ext = url.pathExtension.lowercased()
-        let isRaw = FileConstants.allowedImageExtensions.contains(ext) && !["jpg", "jpeg", "png", "heic", "tiff", "gif", "webp"].contains(ext)
-        
-        if isRaw {
-            if let metadata = readExifUsingExifTool(from: url) {
-                return metadata
-            }
-        }
-        
-        // 2. Fallback to CGImageSource (Standard)
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
-            print("ExifReader: CGImageSource creation failed for \(url.path)")
-            return nil
-        }
-        
+    static func extractMetadata(from source: CGImageSource) -> ExifMetadata? {
         var properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any]
         if properties == nil {
             // Try container properties
@@ -160,7 +144,6 @@ class ExifReader {
         }
         
         guard let props = properties else {
-            print("ExifReader: No properties found for \(url.path)")
             return nil
         }
         
@@ -185,7 +168,7 @@ class ExifReader {
             metadata.cameraModel = tiff[kCGImagePropertyTIFFModel as String] as? String
             
             if let dateString = tiff[kCGImagePropertyTIFFDateTime as String] as? String {
-                metadata.dateTimeOriginal = parseDate(dateString)
+                metadata.dateTimeOriginal = ExifReader.shared.parseDate(dateString)
             }
             
             metadata.software = tiff[kCGImagePropertyTIFFSoftware as String] as? String
@@ -203,7 +186,7 @@ class ExifReader {
             metadata.iso = (exif[kCGImagePropertyExifISOSpeedRatings as String] as? [Int])?.first
             
             if let shutter = exif[kCGImagePropertyExifExposureTime as String] as? Double {
-                metadata.shutterSpeed = formatShutterSpeed(shutter)
+                metadata.shutterSpeed = ExifReader.shared.formatShutterSpeed(shutter)
             }
             
             if let lens = exif[kCGImagePropertyExifLensModel as String] as? String {
@@ -211,7 +194,7 @@ class ExifReader {
             }
             
             if let dateString = exif[kCGImagePropertyExifDateTimeOriginal as String] as? String {
-                metadata.dateTimeOriginal = parseDate(dateString)
+                metadata.dateTimeOriginal = ExifReader.shared.parseDate(dateString)
             }
             
             // Extended (CGImageSource)
@@ -219,6 +202,26 @@ class ExifReader {
         }
         
         return metadata
+    }
+
+    private func _readExif(from url: URL) -> ExifMetadata? {
+        // 1. Try ExifTool ONLY for RAW files (Performance optimization)
+        let ext = url.pathExtension.lowercased()
+        let isRaw = FileConstants.allowedImageExtensions.contains(ext) && !["jpg", "jpeg", "png", "heic", "tiff", "gif", "webp"].contains(ext)
+        
+        if isRaw {
+            if let metadata = readExifUsingExifTool(from: url) {
+                return metadata
+            }
+        }
+        
+        // 2. Fallback to CGImageSource (Standard)
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            print("ExifReader: CGImageSource creation failed for \(url.path)")
+            return nil
+        }
+        
+        return ExifReader.extractMetadata(from: source)
     }
     
     // MARK: - ExifTool Integration
@@ -358,7 +361,7 @@ class ExifReader {
         return nil
     }
 
-    private func readExifUsingExifTool(from url: URL) -> ExifMetadata? {
+    internal func readExifUsingExifTool(from url: URL) -> ExifMetadata? {
         guard let exifToolPath = getExifToolPath() else {
             log("ExifTool not found")
             return nil

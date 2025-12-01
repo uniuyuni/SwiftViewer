@@ -80,7 +80,7 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
     
     @Published var organizeByDate: Bool = true
     @Published var splitEvents: Bool = false
-    @Published var eventSplitGap: Int = 120 // Minutes
+    @Published var eventSplitGap: Int = 30 // Minutes
     @Published var dateFormat: String = "yyyy-MM-dd"
     
     // Copy Progress

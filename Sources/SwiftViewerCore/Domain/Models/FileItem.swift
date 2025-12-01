@@ -1,6 +1,6 @@
 import Foundation
 
-public struct FileItem: Identifiable, Hashable {
+public struct FileItem: Identifiable, Hashable, Sendable {
     public var id: URL { url }
     public let url: URL
     public let isDirectory: Bool
@@ -13,8 +13,9 @@ public struct FileItem: Identifiable, Hashable {
     public let creationDate: Date?
     public let modificationDate: Date?
     public let fileSize: Int64?
+    public let orientation: Int?
     
-    public init(url: URL, isDirectory: Bool, isAvailable: Bool = true, uuid: UUID? = nil, colorLabel: String? = nil, fileCount: Int? = nil, creationDate: Date? = nil, modificationDate: Date? = nil, fileSize: Int64? = nil) {
+    public init(url: URL, isDirectory: Bool, isAvailable: Bool = true, uuid: UUID? = nil, colorLabel: String? = nil, fileCount: Int? = nil, creationDate: Date? = nil, modificationDate: Date? = nil, fileSize: Int64? = nil, orientation: Int? = nil) {
         self.url = url
         self.isDirectory = isDirectory
         self.name = url.lastPathComponent
@@ -25,16 +26,24 @@ public struct FileItem: Identifiable, Hashable {
         self.creationDate = creationDate
         self.modificationDate = modificationDate
         self.fileSize = fileSize
+        self.orientation = orientation
     }
     
     // Helper for backward compatibility if needed, or just convenience
     
     public static func == (lhs: FileItem, rhs: FileItem) -> Bool {
-        return lhs.url == rhs.url && lhs.uuid == rhs.uuid
+        return lhs.url == rhs.url && 
+               lhs.uuid == rhs.uuid && 
+               lhs.fileCount == rhs.fileCount &&
+               lhs.modificationDate == rhs.modificationDate &&
+               lhs.isAvailable == rhs.isAvailable
     }
     
     public func hash(into hasher: inout Hasher) {
         hasher.combine(url)
         hasher.combine(uuid)
+        hasher.combine(fileCount)
+        hasher.combine(modificationDate)
+        hasher.combine(isAvailable)
     }
 }

@@ -6,7 +6,7 @@ import ImageIO
 public protocol MediaRepositoryProtocol {
     func addMediaItem(from url: URL, to catalog: Catalog) async throws -> MediaItem
     func fetchMediaItems(in catalog: Catalog) throws -> [MediaItem]
-    func importMediaItems(from urls: [URL], to catalogID: NSManagedObjectID) async throws
+    func importMediaItems(from urls: [URL], to catalogID: NSManagedObjectID, progress: (@Sendable (Double) -> Void)?) async throws
 }
 
 public class MediaRepository: MediaRepositoryProtocol {
@@ -90,17 +90,46 @@ public class MediaRepository: MediaRepositoryProtocol {
     }
     
     // New method for background import
-    public func importMediaItems(from urls: [URL], to catalogID: NSManagedObjectID) async throws {
+    public func importMediaItems(from urls: [URL], to catalogID: NSManagedObjectID, progress: (@Sendable (Double) -> Void)? = nil) async throws {
         let container = PersistenceController.shared.container
         let allowedExtensions = FileConstants.allAllowedExtensions
+        
+        progress?(0.05)
         
         // 1. Scan files (I/O) - Can be done in parallel
         // We'll do a simple scan first
         let filesToImport = scanFiles(from: urls, allowedExtensions: Set(allowedExtensions))
         
+        progress?(0.1)
+        
+        if filesToImport.isEmpty {
+            progress?(1.0)
+            return
+        }
+        
         // 2. Read Exif Data (Async I/O)
         // We do this BEFORE entering the Core Data context to avoid blocking the DB thread
-        let exifDataMap = await ExifReader.shared.readExifBatch(from: filesToImport)
+        // We can split this into chunks for progress
+        let totalFiles = Double(filesToImport.count)
+        var exifDataMap: [URL: ExifMetadata] = [:]
+        
+        // Chunk size for progress updates
+        let chunkSize = 50
+        // let chunks = filesToImport.chunked(into: chunkSize)
+        
+        var processedCount = 0
+        
+        for i in stride(from: 0, to: filesToImport.count, by: chunkSize) {
+            let end = min(i + chunkSize, filesToImport.count)
+            let chunk = Array(filesToImport[i..<end])
+            
+            let chunkMap = await ExifReader.shared.readExifBatch(from: chunk)
+            exifDataMap.merge(chunkMap) { (_, new) in new }
+            
+            processedCount += chunk.count
+            let currentProgress = 0.1 + (0.7 * (Double(processedCount) / totalFiles)) // 10% to 80%
+            progress?(currentProgress)
+        }
         
         // 3. Write to DB (Core Data)
         try await container.performBackgroundTask { context in
@@ -115,7 +144,11 @@ public class MediaRepository: MediaRepositoryProtocol {
             let existingResults = try? context.fetch(existingPathsRequest) as? [[String: String]]
             let existingPathSet = Set(existingResults?.compactMap { $0["originalPath"] } ?? [])
             
-            for url in filesToImport {
+            var savedCount = 0
+            
+            var importedItems: [MediaItem] = []
+            
+            for (_, url) in filesToImport.enumerated() {
                 if existingPathSet.contains(url.path) {
                     continue // Skip existing
                 }
@@ -126,13 +159,16 @@ public class MediaRepository: MediaRepositoryProtocol {
                 item.fileName = url.lastPathComponent
                 item.catalog = catalog
                 item.importDate = Date()
-                item.modifiedDate = Date()
+                item.modifiedDate = Date() // Default to now, update from attributes
                 item.fileExists = FileManager.default.fileExists(atPath: url.path)
                 
                 // Basic attributes
                 if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) {
                     item.fileSize = (attributes[.size] as? Int64) ?? 0
-                    item.captureDate = (attributes[.creationDate] as? Date) ?? item.captureDate // Use existing if not found
+                    item.captureDate = (attributes[.creationDate] as? Date) ?? item.captureDate
+                    if let modDate = attributes[.modificationDate] as? Date {
+                        item.modifiedDate = modDate
+                    }
                 }
                 
                 item.colorLabel = FileSystemService.shared.getColorLabel(from: url)
@@ -171,17 +207,28 @@ public class MediaRepository: MediaRepositoryProtocol {
                         }
                     }
                     
-                    // Generate and Cache Thumbnail (for offline access)
-                    // We skip this for now to speed up import, or do it in a separate pass?
-                    // The original code had it.
-                    // But generateThumbnail is synchronous.
-                    // We can't easily do it here without blocking the context.
-                    // Let's rely on on-demand generation for now, or add a "Generate Previews" task later.
+                    // Enqueue for background thumbnail generation
+                    importedItems.append(item)
+                }
+                
+                savedCount += 1
+                if savedCount % 100 == 0 {
+                    try? context.save()
                 }
             }
             
             try context.save()
+            
+            // Enqueue thumbnails
+            let ids = importedItems.map { $0.objectID }
+            if !ids.isEmpty {
+                Task { @MainActor in
+                    ThumbnailGenerationService.shared.enqueue(items: ids)
+                }
+            }
         }
+        
+        progress?(1.0)
     }
     
     public func fetchMediaItems(in catalog: Catalog) throws -> [MediaItem] {
@@ -192,9 +239,12 @@ public class MediaRepository: MediaRepositoryProtocol {
     }
     
     private func generateThumbnail(for url: URL) -> NSImage? {
+        let ext = url.pathExtension.lowercased()
+        let isRaw = FileConstants.allowedImageExtensions.contains(ext) && !["jpg", "jpeg", "png", "heic", "tiff", "gif", "webp"].contains(ext)
+        
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceCreateThumbnailWithTransform: !isRaw,
             kCGImageSourceThumbnailMaxPixelSize: 300
         ]
         

@@ -94,7 +94,7 @@ public struct MainWindow: View {
                 }
             }
         }
-        .frame(minWidth: 500, minHeight: 400) // Reduced minWidth
+        .frame(minWidth: 900, minHeight: 600) // Reduced minWidth
         .onChange(of: viewModel.currentFolder) { newFolder in
             if let folder = newFolder {
                 viewModel.openFolder(folder)
@@ -214,13 +214,13 @@ struct DraggableSplitter: View {
                         if isLeft {
                             let newWidth = width + value.translation.width
                             // Clamp
-                             if newWidth >= 100 && newWidth <= 2000 {
+                             if newWidth >= 400 && newWidth <= 2000 {
                                 width = newWidth
                             }
                         } else {
                             let newWidth = width - value.translation.width
                             // Clamp
-                             if newWidth >= 100 && newWidth <= 2000 {
+                             if newWidth >= 400 && newWidth <= 2000 {
                                 width = newWidth
                             }
                         }

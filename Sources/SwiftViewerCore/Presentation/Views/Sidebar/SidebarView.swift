@@ -52,6 +52,8 @@ struct SidebarView: View {
             LocationsSection(viewModel: viewModel, folderToRename: $folderToRename, newFolderName: $newFolderName, showRenameAlert: $showRenameAlert)
         }
         .listStyle(.sidebar)
+        .frame(minWidth: 200)
+        .debugSize()
         .navigationTitle(viewModel.currentCollection?.name ?? viewModel.currentCatalog?.name ?? "SwiftViewer")
         .sheet(isPresented: $showCatalogManager) {
             CatalogManagerView(selectedCatalog: $viewModel.currentCatalog)
@@ -109,6 +111,36 @@ struct SidebarView: View {
         }
         .refreshableCommand {
             refresh()
+        }
+        .safeAreaInset(edge: .bottom) {
+            thumbnailStatusView
+        }
+    }
+    
+    @ObservedObject private var thumbnailService = ThumbnailGenerationService.shared
+    
+    @ViewBuilder
+    private var thumbnailStatusView: some View {
+        if thumbnailService.isGenerating {
+            VStack(spacing: 4) {
+                HStack {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.8)
+                    Text(thumbnailService.statusMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                
+                // Always show progress bar if generating
+                ProgressView(value: thumbnailService.progress)
+                    .progressViewStyle(.linear)
+                    .frame(height: 2)
+            }
+            .padding()
+            .background(.regularMaterial)
+            .overlay(Rectangle().frame(height: 1).foregroundStyle(Color(nsColor: .separatorColor)), alignment: .top)
         }
     }
     
@@ -302,6 +334,10 @@ struct CatalogFolderNodeView: View {
     @Binding var newFolderName: String
     @Binding var showRenameAlert: Bool
     
+    var isSelected: Bool {
+        viewModel.selectedCatalogFolder == node.url
+    }
+    
     var isExpanded: Binding<Bool> {
         Binding(
             get: { viewModel.expandedCatalogFolders.contains(node.url.path) },
@@ -338,7 +374,7 @@ struct CatalogFolderNodeView: View {
         }
         .buttonStyle(.plain)
         .padding(.vertical, 2)
-        .background(viewModel.selectedCatalogFolder == node.url ? Color.accentColor.opacity(0.2) : Color.clear)
+        .background(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
         .onDrop(of: [.fileURL], delegate: FolderDropDelegate(targetFolder: FileItem(url: node.url, isDirectory: true), viewModel: viewModel))
         .contextMenu {
             Button("Rename") {

@@ -86,8 +86,11 @@ class EmbeddedPreviewExtractor {
             } else if type == .preview {
                 // Fallback for preview: Try JpgFromRaw
                 return extractUsingExifToolTag(url: url, tag: "-JpgFromRaw")
+            } else {
+                // ExifTool returned empty data or invalid image
             }
         } catch {
+            // ExifTool execution failed
             return nil
         }
         
@@ -150,30 +153,61 @@ class EmbeddedPreviewExtractor {
         default: return image
         }
         
-        // Create a new image with rotation
-        // This is a simplified rotation logic using NSImage.lockFocus
-        // For better performance/quality, Core Graphics or CIImage is better, but NSImage is easier here.
-        
-        let newSize = (degrees == 90 || degrees == -90) ? NSSize(width: image.size.height, height: image.size.width) : image.size
-        let newImage = NSImage(size: newSize)
-        
-        newImage.lockFocus()
-        
-        let context = NSGraphicsContext.current?.cgContext
-        context?.translateBy(x: newSize.width / 2, y: newSize.height / 2)
-        
-        if isMirrored {
-            context?.scaleBy(x: -1, y: 1)
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return image
         }
         
-        context?.rotate(by: degrees * .pi / 180)
-        context?.translateBy(x: -image.size.width / 2, y: -image.size.height / 2)
+        let originalWidth = CGFloat(cgImage.width)
+        let originalHeight = CGFloat(cgImage.height)
         
-        image.draw(at: .zero, from: NSRect(origin: .zero, size: image.size), operation: .copy, fraction: 1.0)
+        let radians = degrees * .pi / 180
+        let absRadians = abs(radians)
         
-        newImage.unlockFocus()
+        let newWidth = originalWidth * abs(cos(absRadians)) + originalHeight * abs(sin(absRadians))
+        let newHeight = originalWidth * abs(sin(absRadians)) + originalHeight * abs(cos(absRadians))
         
-        return newImage
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+        
+        guard let context = CGContext(data: nil,
+                                      width: Int(newWidth),
+                                      height: Int(newHeight),
+                                      bitsPerComponent: 8,
+                                      bytesPerRow: 0,
+                                      space: colorSpace,
+                                      bitmapInfo: bitmapInfo) else {
+            return image
+        }
+        
+        context.interpolationQuality = .high
+        
+        context.translateBy(x: newWidth / 2, y: newHeight / 2)
+        if isMirrored {
+            context.scaleBy(x: -1, y: 1)
+        }
+        context.rotate(by: -radians) // CGContext rotation is counter-clockwise? Check direction.
+        // Standard EXIF orientation:
+        // 6 = 90 CW. In CG, positive rotation is CCW. So 90 CW = -90 CCW.
+        // My switch says: case 6: degrees = -90.
+        // So rotate(by: -(-90 * pi/180)) = rotate(by: +90 * pi/180) = 90 CCW.
+        // Wait.
+        // EXIF 6 (Right Top) -> Requires 90 CW rotation to be Up.
+        // If I rotate 90 CW, that is -90 degrees in standard math (if Y is up).
+        // But in CGContext (Y up), positive angle is CCW.
+        // So 90 CW = -90 CCW.
+        // My switch has case 6: degrees = -90.
+        // So passing -90 to rotate(by:) (which expects radians) -> rotate(by: -90 * pi/180).
+        // This seems correct for 90 CW.
+        
+        context.translateBy(x: -originalWidth / 2, y: -originalHeight / 2)
+        
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: originalWidth, height: originalHeight))
+        
+        guard let newCGImage = context.makeImage() else {
+            return image
+        }
+        
+        return NSImage(cgImage: newCGImage, size: NSSize(width: newWidth, height: newHeight))
     }
     
     private func extractUsingBinaryScan(url: URL) -> NSImage? {

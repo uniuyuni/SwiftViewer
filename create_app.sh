@@ -40,33 +40,13 @@ if [ -d "Sources/SwiftViewer/Assets.xcassets" ]; then
     xcrun actool "Sources/SwiftViewer/Assets.xcassets" --compile "$APP_BUNDLE/Contents/Resources" --platform macosx --minimum-deployment-target 13.0 --app-icon AppIcon --output-partial-info-plist /tmp/partial.plist
 fi
 
-# create Info.plist
-cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>$APP_NAME</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.uniuyuni.$APP_NAME</string>
-    <key>CFBundleName</key>
-    <string>$APP_NAME</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-</dict>
-</plist>
-EOF
+# copy Info.plist
+if [ -f "Info.plist" ]; then
+    cp "Info.plist" "$APP_BUNDLE/Contents/Info.plist"
+else
+    echo "Error: Info.plist not found."
+    exit 1
+fi
 
 # Set permissions
 chmod +x "$APP_BUNDLE/Contents/MacOS/$APP_NAME"

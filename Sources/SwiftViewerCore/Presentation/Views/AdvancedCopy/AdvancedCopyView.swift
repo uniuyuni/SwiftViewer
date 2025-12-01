@@ -154,13 +154,12 @@ public struct AdvancedCopyView: View {
                         Toggle("Organize by Date (YYYY-MM-DD)", isOn: $viewModel.organizeByDate)
                         
                         if viewModel.organizeByDate {
-                            Toggle("Split events (>30 min gap)", isOn: $viewModel.splitEvents)
+                            Toggle("Split events", isOn: $viewModel.splitEvents)
                                 .padding(.leading)
                             
                             if viewModel.splitEvents {
                                 HStack {
-                                    Text("Gap (min):")
-                                    Stepper("\(viewModel.eventSplitGap)", value: $viewModel.eventSplitGap, in: 1...1440)
+                                    Stepper("Gap: \(viewModel.eventSplitGap) min", value: $viewModel.eventSplitGap, in: 1...1440)
                                 }
                                 .padding(.leading)
                             }

@@ -29,7 +29,9 @@ struct GridView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(minWidth: 400)
             .background(Color(nsColor: .windowBackgroundColor)) // Ensure no transparency gaps
+            .debugSize()
             // Keyboard handling at root level
             .background(
                 Button("") {
@@ -259,6 +261,12 @@ struct GridItemWrapper: View {
             
             Divider()
             
+            Divider()
+            
+            Button("Regenerate Thumbnails") {
+                viewModel.regenerateThumbnails(for: targetItems)
+            }
+            
             Button("Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting(targetItems.map { $0.url })
             }
@@ -279,7 +287,7 @@ struct GridItemView: View {
     
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            AsyncThumbnailView(url: item.url, size: CGSize(width: viewModel.thumbnailSize, height: viewModel.thumbnailSize), id: item.uuid)
+            AsyncThumbnailView(url: item.url, size: CGSize(width: viewModel.thumbnailSize, height: viewModel.thumbnailSize), id: item.uuid, orientation: item.orientation)
                 .frame(width: viewModel.thumbnailSize, height: viewModel.thumbnailSize)
                 .clipped()
             

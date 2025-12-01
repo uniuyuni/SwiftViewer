@@ -159,6 +159,28 @@ public class MainViewModel: ObservableObject {
                 self?.refreshAll()
             }
         }
+        
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didMountNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            Logger.shared.log("Device mounted: \(notification.userInfo ?? [:])")
+            Task { @MainActor in
+                // Delay to ensure volume is ready
+                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1.0s
+                await self?.loadRootFolders()
+                // Resume thumbnail generation if needed
+                self?.checkMissingThumbnails()
+            }
+        }
+        
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didUnmountNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            Logger.shared.log("Device unmounted: \(notification.userInfo ?? [:])")
+            Task { @MainActor in
+                await self?.loadRootFolders()
+            }
+        }
     }
 
     func refreshFolders() {
@@ -178,25 +200,15 @@ public class MainViewModel: ObservableObject {
         // Also refresh expanded folders?
         // We can't easily refresh all expanded folders without traversing.
         // But we can trigger a view update.
-        fileSystemRefreshID = UUID()
-        NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didMountNotification, object: nil, queue: .main
-        ) { [weak self] notification in
-            Logger.shared.log("Device mounted: \(notification.userInfo ?? [:])")
-            Task { @MainActor in
-                // Delay to ensure volume is ready
-                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1.0s
-                await self?.loadRootFolders()
-            }
+        // But we can trigger a view update.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2s delay for FS update
+            self.fileSystemRefreshID = UUID()
         }
         
-        NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didUnmountNotification, object: nil, queue: .main
-        ) { [weak self] notification in
-            Logger.shared.log("Device unmounted: \(notification.userInfo ?? [:])")
-            Task { @MainActor in
-                await self?.loadRootFolders()
-            }
+        // Also reload root folders to update their counts
+        Task {
+            await loadRootFolders()
         }
     }
 
@@ -288,12 +300,23 @@ public class MainViewModel: ObservableObject {
         // filterCriteria = FilterCriteria()
         // isFilterDisabled = false
 
+        // Suspend thumbnail generation to prioritize UI/DB for folder loading
+        ThumbnailGenerationService.shared.suspend()
+        
         loadFiles(in: folder)
+        
+        // Resume after a short delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            ThumbnailGenerationService.shared.resume()
+        }
     }
 
     public func openCatalog(_ catalog: Catalog) {
         // Clear cache from previous catalog/folder to free memory
         ImageCacheService.shared.clearCache()
+        
+        // Cancel any running thumbnail generation to prevent freezing/contention
+        ThumbnailGenerationService.shared.cancelAll()
 
         metadataTask?.cancel()  // Cancel any running metadata task from folder mode
 
@@ -339,8 +362,16 @@ public class MainViewModel: ObservableObject {
         // Filter persistence: Do not reset filters
         // filterCriteria = FilterCriteria()
         // isFilterDisabled = false
+        
+        // Suspend thumbnail generation to prioritize UI/DB for folder loading
+        ThumbnailGenerationService.shared.suspend()
 
         applyFilter()
+        
+        // Resume after a short delay to allow UI to settle
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            ThumbnailGenerationService.shared.resume()
+        }
     }
 
     // ...
@@ -359,7 +390,9 @@ public class MainViewModel: ObservableObject {
             return  // Already importing
         }
 
-        Task {
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self = self else { return }
+            
             do {
                 await MainActor.run {
                     self.importStatusMessage = "Importing..."
@@ -367,26 +400,45 @@ public class MainViewModel: ObservableObject {
 
                 // 2. Import using Repository (background)
                 // Pass folder URL directly, repository handles recursion
-                try await mediaRepository.importMediaItems(from: [url], to: catalogObjectID)
+                try await self.mediaRepository.importMediaItems(from: [url], to: catalogObjectID) { progress in
+                    Task { @MainActor in
+                        self.importProgress = progress
+                    }
+                }
 
                 // 3. Refresh
+                // 3. Refresh
                 await MainActor.run {
-                    // Remove from pending imports
+                    // Only refresh if we are still viewing the same catalog
+                    if self.currentCatalog?.id == catalogID {
+                        // Ensure we see the latest changes from background context
+                        self.persistenceController.container.viewContext.refreshAllObjects()
+                        self.loadMediaItems(from: catalog)
+                    }
+                    
+                    // Remove from pending imports AFTER refresh is done
                     if let index = self.pendingImports.firstIndex(of: url) {
                         self.pendingImports.remove(at: index)
                     }
                     self.updateImportState()
-
-                    // Only refresh if we are still viewing the same catalog
-                    if self.currentCatalog?.id == catalogID {
-                        self.loadMediaItems(from: catalog)
-                        self.loadCollections(for: catalog)
+                    
+                    self.importStatusMessage = "Import complete."
+                }
+                
+                // Clear message after delay
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                
+                await MainActor.run {
+                    if self.importStatusMessage == "Import complete." {
+                        self.importStatusMessage = ""
                     }
                 }
 
             } catch {
                 print("Failed to import folder: \(error)")
                 await MainActor.run {
+                    self.importStatusMessage = "Import failed"
+                    // Remove from pending imports
                     if let index = self.pendingImports.firstIndex(of: url) {
                         self.pendingImports.remove(at: index)
                     }
@@ -395,6 +447,7 @@ public class MainViewModel: ObservableObject {
             }
         }
     }
+
 
     private func updateImportState() {
         isImporting = !pendingImports.isEmpty
@@ -439,20 +492,18 @@ public class MainViewModel: ObservableObject {
                 if let current = currentFolder, current.url == url {
                     openFolder(FileItem(url: newURL, isDirectory: true))
                 }
-
-                Task {
-                    let roots = fileSystemService.getRootFolders()
-                    await MainActor.run {
-                        self.rootFolders = roots
-                    }
-                }
-            } else if let catalog = currentCatalog {
+            }
+            
+            // Always refresh catalog if loaded, to keep tree in sync
+            if let catalog = currentCatalog {
                 loadMediaItems(from: catalog)
-                Task {
-                    let roots = fileSystemService.getRootFolders()
-                    await MainActor.run {
-                        self.rootFolders = roots
-                    }
+            }
+            
+            // Always refresh root folders (for sidebar counts)
+            Task {
+                let roots = fileSystemService.getRootFolders()
+                await MainActor.run {
+                    self.rootFolders = roots
                 }
             }
 
@@ -718,8 +769,8 @@ public class MainViewModel: ObservableObject {
                     // Use MediaItem ID for cache linking
                     return FileItem(
                         url: url, isDirectory: false, uuid: item.id ?? UUID(),
-                        colorLabel: item.colorLabel, creationDate: item.importDate,
-                        modificationDate: item.modifiedDate, fileSize: item.fileSize)
+                        colorLabel: item.colorLabel, creationDate: item.captureDate,
+                        modificationDate: item.modifiedDate, fileSize: item.fileSize, orientation: Int(item.orientation))
                 }
                 fileItems = sortItems(mapped)
                 // Also populate metadata cache for these items
@@ -747,8 +798,9 @@ public class MainViewModel: ObservableObject {
                     return FileItem(
                         url: url, isDirectory: false, isAvailable: isAvailable,
                         uuid: item.id ?? UUID(), colorLabel: item.colorLabel,
-                        creationDate: item.importDate, modificationDate: item.modifiedDate,
-                        fileSize: item.fileSize)
+
+                        creationDate: item.captureDate, modificationDate: item.modifiedDate,
+                        fileSize: item.fileSize, orientation: Int(item.orientation))
                 }
                 fileItems = sortItems(mapped)
             } else if appMode == .folders {
@@ -779,8 +831,8 @@ public class MainViewModel: ObservableObject {
                 let isAvailable = FileManager.default.fileExists(atPath: path)
                 return FileItem(
                     url: url, isDirectory: false, isAvailable: isAvailable, uuid: item.id ?? UUID(),
-                    colorLabel: item.colorLabel, creationDate: item.importDate,
-                    modificationDate: item.modifiedDate, fileSize: item.fileSize)
+                    colorLabel: item.colorLabel, creationDate: item.captureDate,
+                    modificationDate: item.modifiedDate, fileSize: item.fileSize, orientation: Int(item.orientation))
             }
             fileItems = sortItems(mapped)
 
@@ -953,16 +1005,24 @@ public class MainViewModel: ObservableObject {
     }
 
     private func checkAndImportToCatalog(url: URL) async {
-        // Check if the destination folder is part of any Catalog
-        // For now, if we are in Catalog mode, we assume the user wants to add it.
-        // Or if the destination folder is a "Catalog Folder".
-        // This is complex to detect efficiently.
-        // But if we use `importMediaItems`, it handles duplicates.
-        // So we can just try to import.
         guard let catalog = currentCatalog else { return }
-        // Only if we are in Catalog mode or target is known?
-        // Let's just try to import if we have a current catalog.
-        try? await mediaRepository.importMediaItems(from: [url], to: catalog.objectID)
+        
+        // Only import if the parent folder is already in the catalog
+        let parentPath = url.deletingLastPathComponent().standardizedFileURL.path
+        let context = persistenceController.container.viewContext
+        
+        await context.perform {
+            let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
+            request.predicate = NSPredicate(format: "catalog == %@ AND originalPath == %@", catalog, parentPath)
+            request.fetchLimit = 1
+            
+            if let count = try? context.count(for: request), count > 0 {
+                // Parent exists, safe to import
+                Task {
+                    try? await self.mediaRepository.importMediaItems(from: [url], to: catalog.objectID, progress: nil)
+                }
+            }
+        }
     }
 
     // MARK: - Metadata Editing
@@ -1380,7 +1440,7 @@ public class MainViewModel: ObservableObject {
 
             // Build Catalog Tree
             let paths = Set(items.compactMap { $0.originalPath }).map {
-                URL(fileURLWithPath: $0).deletingLastPathComponent()
+                URL(fileURLWithPath: $0).deletingLastPathComponent().standardizedFileURL
             }
             let uniqueFolders = Array(Set(paths)).sorted { $0.path < $1.path }
             catalogRootNodes = buildCatalogTree(from: uniqueFolders)
@@ -1395,12 +1455,16 @@ public class MainViewModel: ObservableObject {
                 return FileItem(
                     url: url, isDirectory: false, uuid: item.id ?? UUID(),
                     colorLabel: item.colorLabel, creationDate: item.importDate,
-                    modificationDate: item.modifiedDate, fileSize: item.fileSize)
+                    modificationDate: item.modifiedDate, fileSize: item.fileSize,
+                    orientation: item.orientation == 0 ? nil : Int(item.orientation))
             }
             fileItems = sortItems(mapped)
             
             // Start background thumbnail pre-fetching
             startBackgroundThumbnailLoading(for: fileItems)
+            
+            // Resume thumbnail generation if needed
+            checkMissingThumbnails()
             
         } catch {
             print("Failed to load media items: \(error)")
@@ -1415,7 +1479,7 @@ public class MainViewModel: ObservableObject {
 
         // 1. Find Common Root
         // Convert to path components
-        let paths = folders.map { $0.pathComponents }
+        let paths = folders.map { $0.standardizedFileURL.pathComponents }
         guard let firstPath = paths.first else { return [] }
 
         var commonPrefix = firstPath
@@ -1425,50 +1489,60 @@ public class MainViewModel: ObservableObject {
                 commonPrefix = Array(commonPrefix.prefix(path.count))
             }
             for (i, component) in commonPrefix.enumerated() {
-                if i >= path.count || path[i] != component {
+                // Case-insensitive comparison for common prefix to avoid splitting on Drive vs drive
+                if i >= path.count || path[i].lowercased() != component.lowercased() {
                     commonPrefix = Array(commonPrefix.prefix(i))
                     break
                 }
             }
         }
 
-        // If common prefix is just "/", we might have multiple roots (e.g. different volumes).
-        // But usually it's a folder.
-
         // 2. Expand folders to include all intermediates from common prefix
-        var allNodes: Set<URL> = []
-        let commonRootURL = URL(
-            fileURLWithPath: "/" + commonPrefix.dropFirst().joined(separator: "/"))  // Reconstruct URL
-
-        // If common root is effectively root, maybe we don't want to show it if it's just "/"?
-        // But let's be safe.
+        var allNodes: [String: URL] = [:] // Key: Lowercase Path, Value: Canonical URL
+        
+        // Construct common root URL safely
+        // If commonPrefix is empty or just "/", handle carefully
+        let commonRootPath = "/" + commonPrefix.dropFirst().joined(separator: "/")
+        let commonRootURL = URL(fileURLWithPath: commonRootPath).standardizedFileURL
+        let commonRootKey = commonRootURL.path.lowercased()
 
         for folder in folders {
-            var current = folder
-            allNodes.insert(current)
+            var current = folder.standardizedFileURL
+            
+            // Insert current
+            let key = current.path.lowercased()
+            if allNodes[key] == nil {
+                allNodes[key] = current
+            }
 
             // Walk up until we hit common root
-            while current.path != commonRootURL.path && current.pathComponents.count > 1 {
-                current = current.deletingLastPathComponent()
-                allNodes.insert(current)
+            // Use case-insensitive check for termination
+            while current.path.lowercased() != commonRootKey && current.pathComponents.count > 1 {
+                current = current.deletingLastPathComponent().standardizedFileURL
+                let parentKey = current.path.lowercased()
+                if allNodes[parentKey] == nil {
+                    allNodes[parentKey] = current
+                }
             }
         }
 
-        // Ensure common root is added if valid
+        // Ensure common root is added if valid and not root
         if commonRootURL.pathComponents.count > 1 {
-            allNodes.insert(commonRootURL)
+            if allNodes[commonRootKey] == nil {
+                allNodes[commonRootKey] = commonRootURL
+            }
         }
 
         // 3. Build Tree
-        let sortedURLs = Array(allNodes).sorted { $0.path < $1.path }
+        let sortedURLs = Array(allNodes.values).sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
 
-        // Calculate file counts
-        var fileCounts: [URL: Int] = [:]
-        // We can optimize this by iterating allMediaItems once
+        // Calculate file counts using lowercase keys
+        var fileCounts: [String: Int] = [:]
         for item in allMediaItems {
             if let path = item.originalPath {
-                let folderURL = URL(fileURLWithPath: path).deletingLastPathComponent()
-                fileCounts[folderURL, default: 0] += 1
+                let folderURL = URL(fileURLWithPath: path).deletingLastPathComponent().standardizedFileURL
+                let key = folderURL.path.lowercased()
+                fileCounts[key, default: 0] += 1
             }
         }
 
@@ -1489,25 +1563,30 @@ public class MainViewModel: ObservableObject {
         func toStruct() -> CatalogFolderNode {
             var node = CatalogFolderNode(url: url, fileCount: fileCount)
             if !children.isEmpty {
-                node.children = children.map { $0.toStruct() }.sorted { $0.name < $1.name }
+                node.children = children.map { $0.toStruct() }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             }
             return node
         }
     }
 
-    private func buildTree(urls: [URL], fileCounts: [URL: Int]) -> [CatalogFolderNode] {
-        var nodes: [URL: NodeBuilder] = [:]
+    private func buildTree(urls: [URL], fileCounts: [String: Int]) -> [CatalogFolderNode] {
+        var nodes: [String: NodeBuilder] = [:] // Key: Lowercase Path
+        
         for url in urls {
-            nodes[url] = NodeBuilder(url: url, fileCount: fileCounts[url] ?? 0)
+            let key = url.path.lowercased()
+            nodes[key] = NodeBuilder(url: url, fileCount: fileCounts[key] ?? 0)
         }
 
         var roots: [NodeBuilder] = []
 
-        for url in urls.sorted(by: { $0.path < $1.path }) {
-            guard let node = nodes[url] else { continue }
+        for url in urls {
+            let key = url.path.lowercased()
+            guard let node = nodes[key] else { continue }
+            
             let parentURL = url.deletingLastPathComponent()
+            let parentKey = parentURL.path.lowercased()
 
-            if let parentNode = nodes[parentURL] {
+            if let parentNode = nodes[parentKey], parentKey != key { // Ensure we don't parent to self (root)
                 parentNode.children.append(node)
             } else {
                 // If parent is not in our node list, this is a root
@@ -1515,7 +1594,29 @@ public class MainViewModel: ObservableObject {
             }
         }
 
-        return roots.map { $0.toStruct() }.sorted { $0.name < $1.name }
+        // Flatten roots: If root is "/" or "/Volumes", replace with children
+        var flattenedRoots = roots
+        
+        var changed = true
+        while changed {
+            changed = false
+            var newRoots: [NodeBuilder] = []
+            
+            for root in flattenedRoots {
+                let path = root.url.path
+                if path == "/" || path == "/Volumes" {
+                    // Promote children
+                    newRoots.append(contentsOf: root.children)
+                    changed = true
+                } else {
+                    newRoots.append(root)
+                }
+            }
+            flattenedRoots = newRoots
+
+        }
+
+        return flattenedRoots.map { $0.toStruct() }.sorted { $0.name < $1.name }
     }
 
     private func populateMetadataCache(from items: [MediaItem]) {
@@ -1771,6 +1872,8 @@ public class MainViewModel: ObservableObject {
         let roots = FileSystemService.shared.getRootFolders()
         await MainActor.run {
             self.rootFolders = roots
+            // Restore last used catalog
+            self.loadCurrentCatalogID()
         }
     }
 
@@ -1851,7 +1954,7 @@ public class MainViewModel: ObservableObject {
                         if let local = localRatingsMap[item.url] {
                             data.rating = Int(local)
                         }
-                        self.metadataCache[item.url] = data
+                        self.metadataCache[item.url.standardizedFileURL] = data
                     }
 
                     // Re-sort if needed (e.g. if sorting by Date which depends on Exif)
@@ -1891,17 +1994,62 @@ public class MainViewModel: ObservableObject {
                 }
             }
 
+    // MARK: - Thumbnail Service
+    @ObservedObject var thumbnailService = ThumbnailGenerationService.shared
+    
+    var isGeneratingThumbnails: Bool { thumbnailService.isGenerating }
+    var thumbnailProgress: Double { thumbnailService.progress }
+    var thumbnailStatusMessage: String { thumbnailService.statusMessage }
+
+    // ...
+
             // Final batch for others
             let finalBatch = batch
             await MainActor.run {
                 for (url, data) in finalBatch {
-                    self.metadataCache[url] = data
+                    // Fix: Use standardized URL for cache key to match FileItem
+                    self.metadataCache[url.standardizedFileURL] = data
                 }
                 self.isLoadingMetadata = false
 
                 // Re-sort if needed (e.g. if sorting by Date which depends on Exif)
                 if self.sortOption == .date {
                     self.applySort()
+                }
+            }
+        }
+    }
+    
+    // MARK: - Thumbnail Resume
+    func checkMissingThumbnails() {
+        guard let catalog = currentCatalog else { return }
+        
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self = self else { return }
+            let context = PersistenceController.shared.newBackgroundContext()
+            
+            var missingIDs: [NSManagedObjectID] = []
+            
+            await context.perform {
+                let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
+                request.predicate = NSPredicate(format: "catalog == %@", catalog)
+                
+                if let items = try? context.fetch(request) {
+                    for item in items {
+                        let uuid = item.id ?? UUID()
+                        if ThumbnailCacheService.shared.loadThumbnail(for: uuid) == nil {
+                            // Check if file is available
+                            if let path = item.originalPath, FileManager.default.fileExists(atPath: path) {
+                                missingIDs.append(item.objectID)
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if !missingIDs.isEmpty {
+                await MainActor.run {
+                    ThumbnailGenerationService.shared.enqueue(items: missingIDs)
                 }
             }
         }
@@ -2006,16 +2154,29 @@ public class MainViewModel: ObservableObject {
             // We must ensure they belong to the current catalog.
             // MediaItem has 'catalog' relationship.
 
+            // Delete items
+            let context = persistenceController.container.viewContext
             for item in items {
-                if item.catalog == catalog {
-                    persistenceController.container.viewContext.delete(item)
-                }
+                // Remove thumbnail
+                let uuid = item.id ?? UUID()
+                ThumbnailCacheService.shared.deleteThumbnail(for: uuid)
+                
+                context.delete(item)
             }
-            try persistenceController.container.viewContext.save()
-
-            // Refresh
-            loadMediaItems(from: catalog)
-
+            
+            try context.save()
+            
+            // UI Updates on MainActor
+            Task { @MainActor in
+                // If current file is in the removed folder, clear it
+                if let current = self.currentFile, current.url.path.hasPrefix(folderPath) {
+                    self.currentFile = nil
+                }
+                
+                // Refresh catalog view
+                self.loadMediaItems(from: catalog)
+            }
+            
             // Clear selection if we removed the selected folder or its parent
             if let selected = selectedCatalogFolder, selected.path.hasPrefix(folderPath) {
                 selectedCatalogFolder = nil
@@ -2370,6 +2531,27 @@ public class MainViewModel: ObservableObject {
         currentFile = nil
     }
 
+    func regenerateThumbnails(for items: [FileItem]) {
+        let uuids = items.map { $0.uuid }
+        guard !uuids.isEmpty else { return }
+        
+        // Fetch ObjectIDs for UUIDs
+        let context = persistenceController.newBackgroundContext()
+        context.perform {
+            let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
+            request.predicate = NSPredicate(format: "id IN %@", uuids)
+            
+            if let mediaItems = try? context.fetch(request) {
+                let objectIDs = mediaItems.map { $0.objectID }
+                
+                Task { @MainActor in
+                    ThumbnailGenerationService.shared.enqueue(items: objectIDs)
+                    Logger.shared.log("MainViewModel: Enqueued \(objectIDs.count) items for thumbnail regeneration.")
+                }
+            }
+        }
+    }
+
     // MARK: - Catalog Update
 
     struct CatalogUpdateStats {
@@ -2709,6 +2891,9 @@ public class MainViewModel: ObservableObject {
         }
         itemsToDelete = []
         showDeleteConfirmation = false
+        
+        // Refresh to update counts
+        refreshFolders()
     }
 
     // MARK: - Layout

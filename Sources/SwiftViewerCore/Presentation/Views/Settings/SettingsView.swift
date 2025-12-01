@@ -49,6 +49,7 @@ struct GeneralSettingsView: View {
 
 struct AppearanceSettingsView: View {
     @AppStorage("defaultThumbnailSize") private var defaultThumbnailSize: Double = 100.0
+    @AppStorage("previewImageSize") private var previewImageSize: Int = 1024
     
     var body: some View {
         Form {
@@ -58,6 +59,13 @@ struct AppearanceSettingsView: View {
                 Text("Small")
             } maximumValueLabel: {
                 Text("Large")
+            }
+            
+            Picker("Offline Preview Size", selection: $previewImageSize) {
+                Text("1024px").tag(1024)
+                Text("1600px").tag(1600)
+                Text("2048px").tag(2048)
+                Text("3840px (4K)").tag(3840)
             }
         }
         .padding()

@@ -111,11 +111,6 @@ struct FolderNodeView: View {
                 loadSubfolders()
             }
         }
-        .onChange(of: viewModel.fileSystemRefreshID) { _ in
-            if isExpanded.wrappedValue {
-                loadSubfolders()
-            }
-        }
         .onAppear {
             if isExpanded.wrappedValue && subfolders == nil {
                 loadSubfolders()
@@ -142,8 +137,9 @@ struct FolderNodeView: View {
     }
     
     private func loadSubfolders() {
+        let url = folder.url
         Task.detached(priority: .userInitiated) {
-            let items = FileSystemService.shared.getContentsOfDirectory(at: folder.url, calculateCounts: true)
+            let items = FileSystemService.shared.getContentsOfDirectory(at: url, calculateCounts: true)
             let folders = items.filter { $0.isDirectory }
             
             await MainActor.run {
@@ -178,16 +174,17 @@ struct FolderDropDelegate: DropDelegate {
         let providers = info.itemProviders(for: [.fileURL])
         guard !providers.isEmpty else { return false }
         
+        // Capture modifiers synchronously on Main Thread
+        let modifiers = NSApp.currentEvent?.modifierFlags
+        let isOptionPressed = modifiers?.contains(.option) ?? false
+        let isCommandPressed = modifiers?.contains(.command) ?? false
+        
         // We only need to check the first item to determine if it's a selection drag
         _ = providers.first?.loadObject(ofClass: URL.self) { url, _ in
             guard let url = url else { return }
             
             Task {
                 await MainActor.run {
-                    let modifiers = NSApp.currentEvent?.modifierFlags
-                    let isOptionPressed = modifiers?.contains(.option) ?? false
-                    let isCommandPressed = modifiers?.contains(.command) ?? false
-                    
                     // Check if the dropped URL is part of the current selection
                     // If so, we move/copy ALL selected files
                     var itemsToProcess: [FileItem] = []
@@ -203,17 +200,9 @@ struct FolderDropDelegate: DropDelegate {
                         // It is in selection, use the whole selection
                         itemsToProcess = Array(viewModel.selectedFiles)
                     } else {
-                        // Not in selection, just process this one (and potentially others if we loaded them, but for now just this one or we'd need to load all)
-                        // Ideally we should load all providers.
-                        // But usually Drag & Drop provides all items.
-                        // If we are dragging from OUR GridView, selectedFiles is the source of truth.
-                        // If dragging from Finder, we rely on providers.
-                        // Since we can't easily distinguish source, let's assume if it matches selection, it's our selection.
+                        // Not in selection, just process this one
                         itemsToProcess = [fileItem(for: url)]
                     }
-                    
-                    // If dragging from Finder (multiple files), we might miss others if we only check first.
-                    // But for internal drag, this covers it.
                     
                     let sourceValues = try? url.resourceValues(forKeys: [.volumeIdentifierKey])
                     let destValues = try? targetFolder.url.resourceValues(forKeys: [.volumeIdentifierKey])
