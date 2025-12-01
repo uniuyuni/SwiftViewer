@@ -333,6 +333,7 @@ struct CatalogFolderNodeView: View {
     @Binding var folderToRename: URL?
     @Binding var newFolderName: String
     @Binding var showRenameAlert: Bool
+    @State private var showRemoveConfirmation = false
     
     var isSelected: Bool {
         viewModel.selectedCatalogFolder == node.url
@@ -383,9 +384,19 @@ struct CatalogFolderNodeView: View {
                 showRenameAlert = true
             }
             
+            Divider()
+            
             Button("Remove from Catalog", role: .destructive) {
+                showRemoveConfirmation = true
+            }
+        }
+        .alert("Remove Folder", isPresented: $showRemoveConfirmation) {
+            Button("Remove", role: .destructive) {
                 viewModel.removeFolderFromCatalog(node.url)
             }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Are you sure you want to remove '\(node.name)' from the catalog?")
         }
     }
 }
