@@ -36,7 +36,8 @@ public struct FileItem: Identifiable, Hashable, Sendable {
                lhs.uuid == rhs.uuid && 
                lhs.fileCount == rhs.fileCount &&
                lhs.modificationDate == rhs.modificationDate &&
-               lhs.isAvailable == rhs.isAvailable
+               lhs.isAvailable == rhs.isAvailable &&
+               lhs.colorLabel == rhs.colorLabel
     }
     
     public func hash(into hasher: inout Hasher) {
@@ -45,5 +46,6 @@ public struct FileItem: Identifiable, Hashable, Sendable {
         hasher.combine(fileCount)
         hasher.combine(modificationDate)
         hasher.combine(isAvailable)
+        hasher.combine(colorLabel)
     }
 }

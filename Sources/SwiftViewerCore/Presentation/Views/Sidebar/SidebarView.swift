@@ -18,43 +18,26 @@ struct SidebarView: View {
             }
         )
         
-        List(selection: selectionBinding) {
-            if viewModel.appMode == .catalog {
-                Section("Collections") {
-                    ForEach(viewModel.collections) { collection in
-                        Button {
-                            viewModel.openCollection(collection)
-                        } label: {
-                            Label(collection.name ?? "Untitled", systemImage: "rectangle.stack")
-                        }
-                        .contextMenu {
-                            Button("Rename") {
-                                collectionToRename = collection
-                                newCollectionName = collection.name ?? ""
-                                showCollectionRenameAlert = true
-                            }
-                            Button("Delete Collection", role: .destructive) {
-                                viewModel.deleteCollection(collection)
-                            }
-                        }
-                    }
-                    
-                    Button {
-                        viewModel.createCollection(name: "New Collection \(Int(Date().timeIntervalSince1970))")
-                    } label: {
-                        Label("New Collection", systemImage: "plus")
-                    }
-                }
+        VStack(spacing: 0) {
+            SidebarListView(
+                viewModel: viewModel,
+                selection: selectionBinding,
+                showCatalogManager: $showCatalogManager,
+                showImportView: $showImportView,
+                folderToRename: $folderToRename,
+                newFolderName: $newFolderName,
+                showRenameAlert: $showRenameAlert,
+                showCollectionRenameAlert: $showCollectionRenameAlert,
+                collectionToRename: $collectionToRename,
+                newCollectionName: $newCollectionName
+            )
+            .refreshableCommand {
+                refresh()
             }
-            
-            CatalogSection(viewModel: viewModel, showCatalogManager: $showCatalogManager, showImportView: $showImportView, folderToRename: $folderToRename, newFolderName: $newFolderName, showRenameAlert: $showRenameAlert)
-            
-            LocationsSection(viewModel: viewModel, folderToRename: $folderToRename, newFolderName: $newFolderName, showRenameAlert: $showRenameAlert)
+            .safeAreaInset(edge: .bottom) {
+                thumbnailStatusView
+            }
         }
-        .listStyle(.sidebar)
-        .frame(minWidth: 200)
-        .debugSize()
-        .navigationTitle(viewModel.currentCollection?.name ?? viewModel.currentCatalog?.name ?? "SwiftViewer")
         .sheet(isPresented: $showCatalogManager) {
             CatalogManagerView(selectedCatalog: $viewModel.currentCatalog)
         }
@@ -108,12 +91,6 @@ struct SidebarView: View {
             } else {
                 Text("Are you sure you want to copy this folder?")
             }
-        }
-        .refreshableCommand {
-            refresh()
-        }
-        .safeAreaInset(edge: .bottom) {
-            thumbnailStatusView
         }
     }
     
@@ -360,20 +337,24 @@ struct CatalogFolderNodeView: View {
     }
     
     var folderContent: some View {
-        Button(action: {
-            viewModel.selectCatalogFolder(node.url)
-        }) {
-            HStack {
-                Label(node.name, systemImage: "folder")
-                    .foregroundStyle(node.isAvailable ? .primary : .secondary)
-                if node.fileCount > 0 {
-                    Text("(\(node.fileCount))")
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
-                }
+        HStack {
+            Label(node.name, systemImage: "folder")
+                .foregroundStyle(node.isAvailable ? .primary : .secondary)
+            if node.fileCount > 0 {
+                Text("(\(node.fileCount))")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
             }
+            Spacer()
         }
-        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .onDrag {
+            DragState.shared.startDrag(url: node.url)
+            return NSItemProvider(object: node.url as NSURL)
+        }
+        .onTapGesture {
+            viewModel.selectCatalogFolder(node.url)
+        }
         .padding(.vertical, 2)
         .background(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
         .onDrop(of: [.fileURL], delegate: FolderDropDelegate(targetFolder: FileItem(url: node.url, isDirectory: true), viewModel: viewModel))
@@ -398,5 +379,70 @@ struct CatalogFolderNodeView: View {
         } message: {
             Text("Are you sure you want to remove '\(node.name)' from the catalog?")
         }
+    }
+}
+
+struct CollectionsSectionView: View {
+    @ObservedObject var viewModel: MainViewModel
+    @Binding var showCollectionRenameAlert: Bool
+    @Binding var collectionToRename: Collection?
+    @Binding var newCollectionName: String
+    
+    var body: some View {
+        Section("Collections") {
+            ForEach(viewModel.collections) { collection in
+                Button {
+                    viewModel.openCollection(collection)
+                } label: {
+                    Label(collection.name ?? "Untitled", systemImage: "rectangle.stack")
+                }
+                .contextMenu {
+                    Button("Rename") {
+                        collectionToRename = collection
+                        newCollectionName = collection.name ?? ""
+                        showCollectionRenameAlert = true
+                    }
+                    Button("Delete Collection", role: .destructive) {
+                        viewModel.deleteCollection(collection)
+                    }
+                }
+            }
+            
+            Button {
+                viewModel.createCollection(name: "New Collection \(Int(Date().timeIntervalSince1970))")
+            } label: {
+                Label("New Collection", systemImage: "plus")
+            }
+        }
+    }
+}
+
+struct SidebarListView: View {
+    @ObservedObject var viewModel: MainViewModel
+    @Binding var selection: FileItem?
+    
+    @Binding var showCatalogManager: Bool
+    @Binding var showImportView: Bool
+    @Binding var folderToRename: URL?
+    @Binding var newFolderName: String
+    @Binding var showRenameAlert: Bool
+    @Binding var showCollectionRenameAlert: Bool
+    @Binding var collectionToRename: Collection?
+    @Binding var newCollectionName: String
+    
+    var body: some View {
+        List(selection: $selection) {
+            if viewModel.appMode == .catalog {
+                CollectionsSectionView(viewModel: viewModel, showCollectionRenameAlert: $showCollectionRenameAlert, collectionToRename: $collectionToRename, newCollectionName: $newCollectionName)
+            }
+            
+            CatalogSection(viewModel: viewModel, showCatalogManager: $showCatalogManager, showImportView: $showImportView, folderToRename: $folderToRename, newFolderName: $newFolderName, showRenameAlert: $showRenameAlert)
+            
+            LocationsSection(viewModel: viewModel, folderToRename: $folderToRename, newFolderName: $newFolderName, showRenameAlert: $showRenameAlert)
+        }
+        .listStyle(.sidebar)
+        .frame(minWidth: 200)
+        .debugSize()
+        .navigationTitle(viewModel.currentCollection?.name ?? viewModel.currentCatalog?.name ?? "SwiftViewer")
     }
 }

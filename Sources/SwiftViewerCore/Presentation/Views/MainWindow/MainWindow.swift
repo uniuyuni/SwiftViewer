@@ -65,34 +65,7 @@ public struct MainWindow: View {
         NavigationSplitView(columnVisibility: $viewModel.columnVisibility) {
             SidebarView(viewModel: viewModel)
         } detail: {
-            HStack(spacing: 0) {
-                GridView(viewModel: viewModel)
-                    .frame(minWidth: 100)
-                    .frame(maxWidth: viewModel.isPreviewVisible ? gridWidth : .infinity)
-                    .frame(width: viewModel.isPreviewVisible ? gridWidth : nil)
-                    .layoutPriority(viewModel.isPreviewVisible ? 0 : 1)
-                
-                if viewModel.isPreviewVisible {
-                    // Splitter for Preview
-                    DraggableSplitter(width: $gridWidth, isLeft: true)
-                    
-                    DetailView(viewModel: viewModel)
-                        .frame(maxWidth: .infinity)
-                        .layoutPriority(1)
-                }
-                
-                if viewModel.isInspectorVisible {
-                    // Divider or Splitter for Inspector?
-                    // For now, just a Divider-like visual or simple border
-                    Rectangle()
-                        .fill(Color(nsColor: .separatorColor))
-                        .frame(width: 1)
-                    
-                    InspectorView(viewModel: viewModel)
-                        .frame(width: 280) // Fixed width for Inspector
-                        .transition(.move(edge: .trailing))
-                }
-            }
+            detailContent
         }
         .frame(minWidth: 900, minHeight: 600) // Reduced minWidth
         .onChange(of: viewModel.currentFolder) { newFolder in
@@ -144,6 +117,51 @@ public struct MainWindow: View {
             } else {
                 Text("Are you sure you want to copy these files?")
             }
+        }
+        .overlay {
+            blockingOverlay
+        }
+    }
+    
+    @ViewBuilder
+    private var detailContent: some View {
+        HStack(spacing: 0) {
+            GridView(viewModel: viewModel)
+                .frame(minWidth: 100)
+                .frame(maxWidth: viewModel.isPreviewVisible ? gridWidth : .infinity)
+                .frame(width: viewModel.isPreviewVisible ? gridWidth : nil)
+                .layoutPriority(viewModel.isPreviewVisible ? 0 : 1)
+            
+            if viewModel.isPreviewVisible {
+                // Splitter for Preview
+                DraggableSplitter(width: $gridWidth, isLeft: true)
+                
+                DetailView(viewModel: viewModel)
+                    .frame(maxWidth: .infinity)
+                    .layoutPriority(1)
+            }
+            
+            if viewModel.isInspectorVisible {
+                // Divider or Splitter for Inspector?
+                // For now, just a Divider-like visual or simple border
+                Rectangle()
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(width: 1)
+                
+                InspectorView(viewModel: viewModel)
+                    .frame(width: 280) // Fixed width for Inspector
+                    .transition(.move(edge: .trailing))
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private var blockingOverlay: some View {
+        if viewModel.isBlockingOperation {
+            BlockingOperationView(
+                message: viewModel.blockingOperationMessage,
+                progress: viewModel.blockingOperationProgress
+            )
         }
     }
     

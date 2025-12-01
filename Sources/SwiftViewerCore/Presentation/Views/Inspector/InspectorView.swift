@@ -72,10 +72,14 @@ struct InspectorView: View {
                         }
                     }
                     .padding()
-                    .onChange(of: selection.map(\.id)) { _ in
-                        // Reset batch state when SELECTION changes (not when metadata updates)
+                    .onChange(of: selection.map(\.id)) { _, _ in
+                        // Reset batch state when SELECTION changes
                         batchRating = 0
-                        batchLabel = nil
+                        
+                        // Determine common label
+                        let firstLabel = selection.first?.colorLabel
+                        let allSame = selection.allSatisfy { $0.colorLabel == firstLabel }
+                        batchLabel = allSame ? firstLabel : nil
                     }
                     
                 } else if let item = viewModel.currentFile ?? selection.first, let exif = viewModel.metadataCache[item.url] {
