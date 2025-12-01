@@ -42,20 +42,27 @@ struct FolderNodeView: View {
                     .padding(.leading)
             }
         } label: {
-            NavigationLink(value: folder) {
-                HStack {
-                    Label(folder.name, systemImage: "folder")
-                    if let count = folder.fileCount {
-                        Text("(\(count))")
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                    }
+            HStack {
+                Label(folder.name, systemImage: "folder")
+                if let count = folder.fileCount {
+                    Text("(\(count))")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
                 }
             }
+            .contentShape(Rectangle())
             .onDrag {
                 DragState.shared.startDrag(url: folder.url)
                 return NSItemProvider(object: folder.url as NSURL)
             }
+            .onTapGesture {
+                viewModel.currentFolder = folder
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 4)
+            .background(viewModel.currentFolder?.url == folder.url ? Color.accentColor : Color.clear)
+            .foregroundStyle(viewModel.currentFolder?.url == folder.url ? .white : .primary)
+            .cornerRadius(6)
             .onDrop(of: [.fileURL], delegate: FolderDropDelegate(targetFolder: folder, viewModel: viewModel))
             .contextMenu {
                 Button("Rename") {

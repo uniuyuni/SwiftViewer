@@ -3,7 +3,7 @@ import SwiftUI
 public struct MainWindow: View {
     @StateObject private var viewModel = MainViewModel()
     
-    @State private var gridWidth: CGFloat = 400 // Default grid width
+    @AppStorage("gridWidth") private var gridWidth: Double = 400 // Default grid width
     
     public init() {}
     
@@ -62,64 +62,71 @@ public struct MainWindow: View {
     }
 
     private var mainContent: some View {
-        NavigationSplitView(columnVisibility: $viewModel.columnVisibility) {
-            SidebarView(viewModel: viewModel)
-        } detail: {
-            detailContent
-        }
-        .frame(minWidth: 900, minHeight: 600) // Reduced minWidth
-        .onChange(of: viewModel.currentFolder) { newFolder in
-            if let folder = newFolder {
-                viewModel.openFolder(folder)
+        ZStack {
+            NavigationSplitView(columnVisibility: $viewModel.columnVisibility) {
+                SidebarView(viewModel: viewModel)
+            } detail: {
+                detailContent
             }
-        }
-        .onChange(of: viewModel.currentCatalog) { newCatalog in
-            if let catalog = newCatalog {
-                viewModel.openCatalog(catalog)
+            .frame(minWidth: 900, minHeight: 600) // Reduced minWidth
+            .onChange(of: viewModel.currentFolder) { _, newFolder in
+                if let folder = newFolder {
+                    viewModel.openFolder(folder)
+                }
             }
-        }
-        .background {
-            hiddenControls
-        }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Slider(value: $viewModel.thumbnailSize, in: 50...300)
-                    .frame(width: 100)
+            .onChange(of: viewModel.currentCatalog) { _, newCatalog in
+                if let catalog = newCatalog {
+                    viewModel.openCatalog(catalog)
+                }
             }
-        }
-        .onChange(of: viewModel.filterCriteria.minRating) { _ in viewModel.applyFilter() }
-        .onChange(of: viewModel.filterCriteria.colorLabel) { _ in viewModel.applyFilter() }
-        .focusedSceneValue(\.toggleInspector) {
-            withAnimation {
-                viewModel.toggleInspector()
+            .background {
+                hiddenControls
             }
-        }
-        .alert("Move Files", isPresented: $viewModel.showMoveFilesConfirmation) {
-            Button("Move", role: .destructive) {
-                viewModel.confirmMoveFiles()
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Slider(value: $viewModel.thumbnailSize, in: 50...300)
+                        .frame(width: 100)
+                }
             }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            if let dest = viewModel.fileOpDestination {
-                Text("Are you sure you want to move \(viewModel.filesToMove.count) files to \"\(dest.lastPathComponent)\"?")
-            } else {
-                Text("Are you sure you want to move these files?")
+            .onChange(of: viewModel.filterCriteria.minRating) { _, _ in viewModel.applyFilter() }
+            .onChange(of: viewModel.filterCriteria.colorLabel) { _, _ in viewModel.applyFilter() }
+            .focusedSceneValue(\.toggleInspector) {
+                withAnimation {
+                    viewModel.toggleInspector()
+                }
             }
-        }
-        .alert("Copy Files", isPresented: $viewModel.showCopyFilesConfirmation) {
-            Button("Copy") {
-                viewModel.confirmCopyFiles()
+            .alert("Move Files", isPresented: $viewModel.showMoveFilesConfirmation) {
+                Button("Move", role: .destructive) {
+                    viewModel.confirmMoveFiles()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                if let dest = viewModel.fileOpDestination {
+                    Text("Are you sure you want to move \(viewModel.filesToMove.count) files to \"\(dest.lastPathComponent)\"?")
+                } else {
+                    Text("Are you sure you want to move these files?")
+                }
             }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            if let dest = viewModel.fileOpDestination {
-                Text("Are you sure you want to copy \(viewModel.filesToCopy.count) files to \"\(dest.lastPathComponent)\"?")
-            } else {
-                Text("Are you sure you want to copy these files?")
+            .alert("Copy Files", isPresented: $viewModel.showCopyFilesConfirmation) {
+                Button("Copy") {
+                    viewModel.confirmCopyFiles()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                if let dest = viewModel.fileOpDestination {
+                    Text("Are you sure you want to copy \(viewModel.filesToCopy.count) files to \"\(dest.lastPathComponent)\"?")
+                } else {
+                    Text("Are you sure you want to copy these files?")
+                }
             }
-        }
-        .overlay {
-            blockingOverlay
+            
+            if viewModel.isBlockingOperation {
+                BlockingOperationView(
+                    message: viewModel.blockingOperationMessage,
+                    progress: viewModel.blockingOperationProgress
+                )
+                .zIndex(100) // Ensure it's on top
+            }
         }
     }
     
@@ -134,7 +141,10 @@ public struct MainWindow: View {
             
             if viewModel.isPreviewVisible {
                 // Splitter for Preview
-                DraggableSplitter(width: $gridWidth, isLeft: true)
+                DraggableSplitter(width: Binding(
+                    get: { CGFloat(gridWidth) },
+                    set: { gridWidth = Double($0) }
+                ), isLeft: true)
                 
                 DetailView(viewModel: viewModel)
                     .frame(maxWidth: .infinity)

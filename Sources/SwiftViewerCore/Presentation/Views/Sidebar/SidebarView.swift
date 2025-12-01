@@ -355,8 +355,11 @@ struct CatalogFolderNodeView: View {
         .onTapGesture {
             viewModel.selectCatalogFolder(node.url)
         }
-        .padding(.vertical, 2)
-        .background(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
+        .padding(.vertical, 4)
+        .padding(.horizontal, 4)
+        .background(isSelected ? Color.accentColor : Color.clear)
+        .foregroundStyle(isSelected ? .white : .primary)
+        .cornerRadius(6)
         .onDrop(of: [.fileURL], delegate: FolderDropDelegate(targetFolder: FileItem(url: node.url, isDirectory: true), viewModel: viewModel))
         .contextMenu {
             Button("Rename") {

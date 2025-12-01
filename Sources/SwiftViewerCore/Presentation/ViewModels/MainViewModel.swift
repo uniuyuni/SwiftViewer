@@ -3139,9 +3139,12 @@ public class MainViewModel: ObservableObject {
 
     nonisolated private func countFiles(at url: URL) -> Int {
         var count = 0
-        if let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil) {
-            for _ in enumerator {
-                count += 1
+        if let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.isDirectoryKey]) {
+            for case let fileURL as URL in enumerator {
+                if let resourceValues = try? fileURL.resourceValues(forKeys: [.isDirectoryKey]),
+                   let isDirectory = resourceValues.isDirectory, !isDirectory {
+                    count += 1
+                }
             }
         }
         return count
@@ -3169,11 +3172,17 @@ public class MainViewModel: ObservableObject {
             try fileManager.copyItem(at: source, to: destination)
             currentCount += 1
             
-            // Update progress
-            if totalItems > 0 {
+            // Update progress (Throttle: every 10 items or last item)
+            if totalItems > 0 && (currentCount % 10 == 0 || currentCount == totalItems) {
                 let progress = Double(currentCount) / Double(totalItems)
+                let count = currentCount
                 await MainActor.run {
                     self.blockingOperationProgress = progress
+                    self.blockingOperationMessage = "Copying \(count) of \(totalItems) items..."
+                }
+                // Small sleep to ensure UI has time to render if loop is very tight
+                if currentCount % 100 == 0 {
+                    try? await Task.sleep(nanoseconds: 1_000_000) // 1ms
                 }
             }
         }
