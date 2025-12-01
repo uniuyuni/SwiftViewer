@@ -28,8 +28,8 @@ class ThumbnailGenerator {
             if Task.isCancelled { return nil }
             // Run synchronous downsample in detached task to avoid blocking calling thread
             let thumbWrapper = await Task.detached(priority: .userInitiated) {
-                // Use applyTransform: false to get raw sensor data, we will rotate manually in View
-                let img = self.downsample(imageAt: url, to: size, applyTransform: false)
+                // Use applyTransform: true to get correct orientation
+                let img = self.downsample(imageAt: url, to: size, applyTransform: true)
                 return SendableImage(image: img)
             }.value
             
@@ -62,8 +62,15 @@ class ThumbnailGenerator {
                             print("DEBUG: Failed to resize embedded preview for \(url.lastPathComponent)")
                         }
                         
-                        ImageCacheService.shared.setImage(largePreview, forKey: key)
-                        return largePreview
+                        var finalImage = largePreview
+                        if let orientation = orientation {
+                            if let rotated = self.rotate(image: finalImage, orientation: orientation) {
+                                finalImage = rotated
+                            }
+                        }
+                        
+                        ImageCacheService.shared.setImage(finalImage, forKey: key)
+                        return finalImage
                     } else {
                         print("DEBUG: EmbeddedPreviewExtractor returned NIL for \(url.lastPathComponent)")
                     }
@@ -99,7 +106,12 @@ class ThumbnailGenerator {
             return SendableImage(image: img)
         }.value
         
-        if let thumb = thumbWrapper.image {
+        if var thumb = thumbWrapper.image {
+            if let orientation = orientation {
+                if let rotated = rotate(image: thumb, orientation: orientation) {
+                    thumb = rotated
+                }
+            }
             ImageCacheService.shared.setImage(thumb, forKey: key)
             return thumb
         }
@@ -149,7 +161,8 @@ class ThumbnailGenerator {
         // Generate Thumbnail if needed
         if image == nil {
             if isRaw {
-                if let img = downsample(imageAt: url, to: size, applyTransform: false) {
+                // Try with applyTransform: true first to get correct orientation
+                if let img = downsample(imageAt: url, to: size, applyTransform: true) {
                     image = img
                     ImageCacheService.shared.setImage(img, forKey: key)
                 }
@@ -188,8 +201,20 @@ class ThumbnailGenerator {
                         ImageCacheService.shared.setImage(resized, forKey: key)
                     } else {
                         // Use full size if resize fails
+                        // Use full size if resize fails
                         image = largePreview
-                        ImageCacheService.shared.setImage(largePreview, forKey: key)
+                        
+                        // Rotate if needed (we don't have orientation passed here? We do have metadata!)
+                        // But wait, generateThumbnailAndMetadataSync doesn't take orientation arg.
+                        // It extracts metadata.
+                        // So we should use the extracted metadata orientation!
+                        if let meta = metadata, let orientation = meta.orientation {
+                             if let rotated = rotate(image: largePreview, orientation: orientation) {
+                                 image = rotated
+                             }
+                        }
+                        
+                        ImageCacheService.shared.setImage(image!, forKey: key)
                     }
                 }
             }
@@ -258,5 +283,54 @@ class ThumbnailGenerator {
         }
         
         return NSImage(cgImage: newCGImage, size: NSSize(width: newWidth, height: newHeight))
+    }
+    
+    private func rotate(image: NSImage, orientation: Int) -> NSImage? {
+        var degrees: CGFloat = 0
+        switch orientation {
+        case 3, 4: degrees = 180
+        case 6, 5: degrees = -90 // Right -> Rotate Clockwise 90? No, CG coords are different.
+            // EXIF 6 (Right Top) means the 0th row is visual right side. We need to rotate 90 CW?
+            // Let's stick to standard mapping.
+            // 6: 90 CW (or -90 CCW?)
+            // In AsyncThumbnailView we used: 6 -> 90 degrees.
+            // Here we rotate the IMAGE.
+            degrees = -90 // 90 CW
+        case 8, 7: degrees = 90 // 90 CCW
+        default: return image
+        }
+        
+        // If 0, return
+        if degrees == 0 { return image }
+        
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        
+        let radians = degrees * .pi / 180
+        
+        var newSize = CGRect(origin: .zero, size: image.size).applying(CGAffineTransform(rotationAngle: radians)).integral.size
+        // Swap for 90/270
+        if abs(degrees) == 90 {
+            newSize = CGSize(width: image.size.height, height: image.size.width)
+        }
+        
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+        
+        guard let context = CGContext(data: nil,
+                                      width: Int(newSize.width),
+                                      height: Int(newSize.height),
+                                      bitsPerComponent: 8,
+                                      bytesPerRow: 0,
+                                      space: colorSpace,
+                                      bitmapInfo: bitmapInfo) else { return nil }
+        
+        context.translateBy(x: newSize.width / 2, y: newSize.height / 2)
+        context.rotate(by: radians)
+        context.translateBy(x: -image.size.width / 2, y: -image.size.height / 2)
+        
+        context.draw(cgImage, in: CGRect(origin: .zero, size: image.size))
+        
+        guard let newCGImage = context.makeImage() else { return nil }
+        return NSImage(cgImage: newCGImage, size: newSize)
     }
 }

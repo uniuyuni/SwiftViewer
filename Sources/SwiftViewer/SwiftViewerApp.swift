@@ -30,6 +30,10 @@ struct SwiftViewerApp: App {
                 }
                 .keyboardShortcut("r", modifiers: .command)
                 .keyboardShortcut(KeyEquivalent(Character(UnicodeScalar(0xF708)!)), modifiers: [])
+                
+                Divider()
+                
+                UpdateCatalogMenuButton()
             }
         }
         
@@ -73,5 +77,16 @@ struct InspectorToggleMenuButton: View {
         }
         .keyboardShortcut("i", modifiers: [.command, .option])
         .disabled(toggleInspector == nil)
+    }
+}
+
+struct UpdateCatalogMenuButton: View {
+    @FocusedValue(\.updateCatalog) var updateCatalog
+    
+    var body: some View {
+        Button("Update Catalog") {
+            updateCatalog?()
+        }
+        .disabled(updateCatalog == nil)
     }
 }

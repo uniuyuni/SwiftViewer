@@ -74,6 +74,18 @@ class ExifReader {
         }.value
     }
     
+    func readExifSync(from url: URL) -> ExifMetadata? {
+        let key = url.path as NSString
+        if let cached = cache.object(forKey: key) {
+            return cached.metadata
+        }
+        let metadata = _readExif(from: url)
+        if let metadata = metadata {
+            cache.setObject(ExifMetadataWrapper(metadata: metadata), forKey: key)
+        }
+        return metadata
+    }
+    
     func readOrientation(from url: URL) async -> Int? {
         // Fast path: Check cache first
         let key = url.path as NSString
@@ -177,6 +189,19 @@ class ExifReader {
         // IPTC (Rating, etc.)
         if let iptc = props[kCGImagePropertyIPTCDictionary as String] as? [String: Any] {
             metadata.rating = iptc[kCGImagePropertyIPTCStarRating as String] as? Int
+            
+            if let urgency = iptc[kCGImagePropertyIPTCUrgency as String] as? Int {
+                switch urgency {
+                case 1: metadata.colorLabel = "Red"
+                case 2: metadata.colorLabel = "Orange"
+                case 3: metadata.colorLabel = "Yellow"
+                case 4: metadata.colorLabel = "Green"
+                case 5: metadata.colorLabel = "Blue"
+                case 6: metadata.colorLabel = "Purple"
+                case 7: metadata.colorLabel = "Gray"
+                default: break
+                }
+            }
         }
         
         // Exif (Shooting info)
@@ -244,6 +269,8 @@ class ExifReader {
         let ExifImageHeight: Int?
         let Orientation: Int?
         let Rating: Int?
+        let Label: String?
+        let Urgency: Int?
         // Extended
         let MeteringMode: Int?
         let Flash: Int?
@@ -313,6 +340,23 @@ class ExifReader {
                 
                 meta.orientation = output.Orientation
                 meta.rating = output.Rating
+                
+                // Map Label or Urgency to colorLabel
+                if let label = output.Label, !label.isEmpty {
+                    meta.colorLabel = label
+                } else if let urgency = output.Urgency {
+                    // Map Urgency to Label
+                    switch urgency {
+                    case 1: meta.colorLabel = "Red"
+                    case 2: meta.colorLabel = "Orange"
+                    case 3: meta.colorLabel = "Yellow"
+                    case 4: meta.colorLabel = "Green"
+                    case 5: meta.colorLabel = "Blue"
+                    case 6: meta.colorLabel = "Purple"
+                    case 7: meta.colorLabel = "Gray"
+                    default: break
+                    }
+                }
                 
                 // Extended
                 if let mm = output.MeteringMode { meta.meteringMode = String(mm) }
@@ -425,6 +469,23 @@ class ExifReader {
             
             meta.orientation = output.Orientation
             meta.rating = output.Rating
+            
+            // Map Label or Urgency to colorLabel
+            if let label = output.Label, !label.isEmpty {
+                meta.colorLabel = label
+            } else if let urgency = output.Urgency {
+                // Map Urgency to Label
+                switch urgency {
+                case 1: meta.colorLabel = "Red"
+                case 2: meta.colorLabel = "Orange"
+                case 3: meta.colorLabel = "Yellow"
+                case 4: meta.colorLabel = "Green"
+                case 5: meta.colorLabel = "Blue"
+                case 6: meta.colorLabel = "Purple"
+                case 7: meta.colorLabel = "Gray"
+                default: break
+                }
+            }
             
             // Swap dimensions if rotated 90/270 degrees
             if let orientation = meta.orientation, [5, 6, 7, 8].contains(orientation) {

@@ -92,6 +92,14 @@ struct SidebarView: View {
                 Text("Are you sure you want to copy this folder?")
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .refreshFileSystem)) { _ in
+            Task {
+                await viewModel.loadRootFolders()
+                await MainActor.run {
+                    viewModel.fileSystemRefreshID = UUID()
+                }
+            }
+        }
     }
     
     @ObservedObject private var thumbnailService = ThumbnailGenerationService.shared
@@ -169,10 +177,6 @@ struct CatalogSection: View {
     @Binding var newFolderName: String
     @Binding var showRenameAlert: Bool
     
-    @State private var showUpdateConfirmation = false
-    @State private var updateStats: MainViewModel.CatalogUpdateStats?
-    @State private var catalogToUpdate: Catalog?
-    
     var body: some View {
         Section("Catalogs") {
             Button("Manage Catalogs") {
@@ -188,7 +192,7 @@ struct CatalogSection: View {
                     }
                     .buttonStyle(.plain)
                     
-                    if viewModel.isScanningCatalog {
+                    if viewModel.isScanningCatalog || viewModel.isSyncingCatalog {
                         ProgressView()
                             .controlSize(.small)
                             .scaleEffect(0.7)
@@ -196,30 +200,11 @@ struct CatalogSection: View {
                 }
                 .contextMenu {
                     Button("Update Catalog") {
-                        catalogToUpdate = catalog
-                        Task {
-                            let stats = await viewModel.checkForUpdates(catalog: catalog)
-                            updateStats = stats
-                            showUpdateConfirmation = true
-                        }
+                        viewModel.triggerCatalogUpdateCheck(for: catalog)
                     }
                     
                     Button("Rename") {
                         // Implement catalog rename if needed (not requested but good practice)
-                    }
-                }
-                .alert("Update Catalog", isPresented: $showUpdateConfirmation) {
-                    Button("Update", role: .destructive) { // Destructive because it deletes files from DB
-                        if let catalog = catalogToUpdate, let stats = updateStats {
-                            viewModel.performCatalogUpdate(catalog: catalog, stats: stats)
-                        }
-                    }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    if let stats = updateStats {
-                        Text("Found changes:\nAdded: \(stats.added.count)\nDeleted: \(stats.removed.count)\nUpdated: \(stats.updated.count)")
-                    } else {
-                        Text("Scanning...")
                     }
                 }
                 

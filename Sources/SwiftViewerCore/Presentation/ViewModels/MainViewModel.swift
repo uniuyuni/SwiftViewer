@@ -179,6 +179,7 @@ public class MainViewModel: ObservableObject {
             Logger.shared.log("Device unmounted: \(notification.userInfo ?? [:])")
             Task { @MainActor in
                 await self?.loadRootFolders()
+                self?.refreshFolders() // Check if current folder is valid
             }
         }
     }
@@ -1982,7 +1983,7 @@ public class MainViewModel: ObservableObject {
     @Published var blockingOperationMessage: String = ""
 
     // Async helper for Copy
-    private func performCopyFile(_ item: FileItem, to folderURL: URL) async {
+    private func performCopyFile(_ item: FileItem, to folderURL: URL, progressHandler: ((Double) -> Void)? = nil) async {
         let srcPath = item.url.standardizedFileURL.path
         let destPath = folderURL.standardizedFileURL.path
         if destPath.hasPrefix(srcPath) {
@@ -1993,8 +1994,17 @@ public class MainViewModel: ObservableObject {
         do {
             let destURL = folderURL.appendingPathComponent(item.url.lastPathComponent)
             // Run I/O on background thread
+            // Run I/O on background thread
             try await Task.detached(priority: .userInitiated) {
-                try FileManager.default.copyItem(at: item.url, to: destURL)
+                if item.isDirectory {
+                    // For directories, use recursive copy with progress
+                    var currentCount = 0
+                    let totalFiles = self.countFiles(at: item.url)
+                    try await self.copyWithProgress(from: item.url, to: destURL, totalItems: totalFiles, currentCount: &currentCount)
+                } else {
+                    // Use chunked copy for progress
+                    try await self.copyFileWithProgress(from: item.url, to: destURL, fileSize: item.fileSize ?? 0, progressHandler: progressHandler)
+                }
             }.value
             Logger.shared.log("Copied \(item.name) to \(destURL.path)")
         } catch {
@@ -2063,6 +2073,7 @@ public class MainViewModel: ObservableObject {
                 self.copyDestinationURL = nil
                 self.showCopyConfirmation = false
                 self.fileSystemRefreshID = UUID() // Force refresh
+                NotificationCenter.default.post(name: .refreshFileSystem, object: nil)
             }
         }
     }
@@ -2088,14 +2099,19 @@ public class MainViewModel: ObservableObject {
         blockingOperationMessage = "Copying \(items.count) items..."
         blockingOperationProgress = 0
         
-        Task {
+        Task { @MainActor in
             var count = 0
             let total = Double(items.count)
             
-            for item in items {
+            for (index, item) in items.enumerated() {
                 self.blockingOperationMessage = "Copying \(item.name)..."
                 
-                await performCopyFile(item, to: dest)
+                await performCopyFile(item, to: dest) { fileProgress in
+                    let totalProgress = (Double(index) + fileProgress) / total
+                    Task { @MainActor in
+                        self.blockingOperationProgress = totalProgress
+                    }
+                }
                 
                 count += 1
                 self.blockingOperationProgress = Double(count) / total
@@ -2105,11 +2121,12 @@ public class MainViewModel: ObservableObject {
             self.filesToCopy = []
             self.fileOpDestination = nil
             self.showCopyFilesConfirmation = false
+            NotificationCenter.default.post(name: .refreshFileSystem, object: nil)
         }
     }
 
     // Async helper for Move
-    private func performMoveFile(_ item: FileItem, to folderURL: URL) async {
+    private func performMoveFile(_ item: FileItem, to folderURL: URL, progressHandler: ((Double) -> Void)? = nil) async {
         let srcPath = item.url.standardizedFileURL.path
         let destPath = folderURL.standardizedFileURL.path
         if destPath.hasPrefix(srcPath) {
@@ -2119,15 +2136,36 @@ public class MainViewModel: ObservableObject {
 
         let destURL = folderURL.appendingPathComponent(item.url.lastPathComponent)
 
-        // 1. Update Catalog paths BEFORE move to prevent data loss during cross-volume move (Copy+Delete)
-        // We do this on a background context but await it.
+        // 1. Update Catalog paths BEFORE move
         await updateCatalogPaths(from: item.url, to: destURL)
 
         do {
-            // 2. Run I/O on background thread
-            try await Task.detached(priority: .userInitiated) {
-                try FileManager.default.moveItem(at: item.url, to: destURL)
-            }.value
+            // Check volumes
+            let srcValues = try? item.url.resourceValues(forKeys: [.volumeIdentifierKey])
+            let destValues = try? folderURL.resourceValues(forKeys: [.volumeIdentifierKey])
+            
+            let sameVolume = (srcValues?.volumeIdentifier as? NSObject) != nil && (destValues?.volumeIdentifier as? NSObject) != nil && (srcValues?.volumeIdentifier as? NSObject) == (destValues?.volumeIdentifier as? NSObject)
+            
+            if sameVolume {
+                // Fast Move (Rename)
+                try await Task.detached(priority: .userInitiated) {
+                    try FileManager.default.moveItem(at: item.url, to: destURL)
+                }.value
+                progressHandler?(1.0)
+            } else {
+                // Cross-Volume Move (Copy + Delete) with Progress
+                // Cross-Volume Move (Copy + Delete) with Progress
+                try await Task.detached(priority: .userInitiated) {
+                    if item.isDirectory {
+                        var currentCount = 0
+                        let totalFiles = self.countFiles(at: item.url)
+                        try await self.copyWithProgress(from: item.url, to: destURL, totalItems: totalFiles, currentCount: &currentCount)
+                    } else {
+                        try await self.copyFileWithProgress(from: item.url, to: destURL, fileSize: item.fileSize ?? 0, progressHandler: progressHandler)
+                    }
+                    try FileManager.default.removeItem(at: item.url)
+                }.value
+            }
             
             Logger.shared.log("Moved \(item.name) to \(destURL.path)")
 
@@ -2139,8 +2177,6 @@ public class MainViewModel: ObservableObject {
             }
         } catch {
             Logger.shared.log("Failed to move file: \(error)")
-            // Note: If move failed, Catalog now points to invalid location.
-            // Ideally we should revert, but complex. User can manually fix or re-import.
         }
     }
 
@@ -2166,14 +2202,19 @@ public class MainViewModel: ObservableObject {
         blockingOperationMessage = "Moving \(items.count) items..."
         blockingOperationProgress = 0
         
-        Task {
+        Task { @MainActor in
             var count = 0
             let total = Double(items.count)
             
-            for item in items {
+            for (index, item) in items.enumerated() {
                 self.blockingOperationMessage = "Moving \(item.name)..."
                 
-                await performMoveFile(item, to: dest)
+                await performMoveFile(item, to: dest) { fileProgress in
+                    let totalProgress = (Double(index) + fileProgress) / total
+                    Task { @MainActor in
+                        self.blockingOperationProgress = totalProgress
+                    }
+                }
                 
                 count += 1
                 self.blockingOperationProgress = Double(count) / total
@@ -2184,6 +2225,7 @@ public class MainViewModel: ObservableObject {
             self.fileOpDestination = nil
             self.showMoveFilesConfirmation = false
             self.fileSystemRefreshID = UUID() // Force refresh
+            NotificationCenter.default.post(name: .refreshFileSystem, object: nil)
         }
     }
 
@@ -2259,6 +2301,7 @@ public class MainViewModel: ObservableObject {
                 self.moveDestinationURL = nil
                 self.showMoveConfirmation = false
                 self.fileSystemRefreshID = UUID() // Force refresh
+                NotificationCenter.default.post(name: .refreshFileSystem, object: nil)
             }
         }
     }
@@ -2489,18 +2532,51 @@ public class MainViewModel: ObservableObject {
         updateColorLabel(for: [item], label: label)
     }
 
-    func updateRating(for items: [FileItem], rating: Int) {
-        for item in items {
-            updateRating(for: item, rating: rating)
-        }
-    }
-
     public func setRating(_ rating: Int, for items: [FileItem]) {
         updateRating(for: items, rating: rating)
-        // applyFilter is called inside updateRating via Task, but we might want to trigger it once here?
-        // Since updateRating spawns a Task, it's async.
-        // We can force a UI update here.
-        applyFilter()
+    }
+
+    func updateRating(for items: [FileItem], rating: Int) {
+        // 1. Update Metadata Cache (Optimistic)
+        for item in items {
+            if var meta = metadataCache[item.url] {
+                meta.rating = rating
+                metadataCache[item.url] = meta
+            } else {
+                var meta = ExifMetadata()
+                meta.rating = rating
+                metadataCache[item.url] = meta
+            }
+        }
+        
+        // 2. Persist (Async)
+        Task {
+            // Update Core Data
+            let context = persistenceController.newBackgroundContext()
+            await context.perform {
+                for item in items {
+                    let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
+                    if let uuid = item.uuid {
+                        request.predicate = NSPredicate(format: "id == %@", uuid as CVarArg)
+                    } else {
+                        request.predicate = NSPredicate(format: "originalPath == %@", item.url.path)
+                    }
+                    
+                    if let mediaItems = try? context.fetch(request), let mediaItem = mediaItems.first {
+                        mediaItem.rating = Int16(rating)
+                    }
+                }
+                try? context.save()
+            }
+            
+            // Write to File (Batch)
+            let urls = items.map { $0.url }
+            self.writeMetadataBatch(to: urls, rating: rating, label: nil)
+            
+            await MainActor.run {
+                self.applyFilter()
+            }
+        }
     }
 
     func updateColorLabel(for items: [FileItem], label: String?) {
@@ -2540,8 +2616,6 @@ public class MainViewModel: ObservableObject {
         }
         
         // 2. Update selectedFiles (Batch)
-        // We need to replace the old items with new ones in the set
-        // to ensure the UI (Inspector) sees the new state.
         for newItem in updatedItems {
             if let oldSelected = selectedFiles.first(where: { $0.id == newItem.id }) {
                 selectedFiles.remove(oldSelected)
@@ -2551,58 +2625,31 @@ public class MainViewModel: ObservableObject {
         
         // 3. Persist (Async)
         Task {
-            for item in items {
-                 persistColorLabel(label, for: item)
-            }
-        }
-        
-        applyFilter()
-    }
-    
-    private func persistColorLabel(_ label: String?, for item: FileItem) {
-        var url = item.url
-        var values = URLResourceValues()
-
-        if let label = label {
-            // Map color name to number
-            let colorMap: [String: Int] = [
-                "Gray": 1, "Green": 2, "Purple": 3, "Blue": 4, "Yellow": 5, "Red": 6,
-                "Orange": 7,
-            ]
-
-            if let number = colorMap[label] {
-                values.labelNumber = number
-                try? url.setResourceValues(values)
-
-                // Also set tagNames for compatibility
-                try? (url as NSURL).setResourceValue([label], forKey: .tagNamesKey)
-            } else {
-                values.labelNumber = nil
-                try? url.setResourceValues(values)
-                try? (url as NSURL).setResourceValue([], forKey: .tagNamesKey)
-            }
-        } else {
-            values.labelNumber = nil
-            try? url.setResourceValues(values)
-            try? (url as NSURL).setResourceValue([], forKey: .tagNamesKey)
-        }
-
-        // Update Core Data
-        let context = persistenceController.newBackgroundContext()
-        context.performAndWait {
-            let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
-
-            if let uuid = item.uuid {
-                request.predicate = NSPredicate(format: "id == %@", uuid as CVarArg)
-            } else {
-                request.predicate = NSPredicate(format: "originalPath == %@", item.url.path)
-            }
-
-            if let mediaItems = try? context.fetch(request), !mediaItems.isEmpty {
-                for mediaItem in mediaItems {
-                    mediaItem.colorLabel = label
+            // Update Core Data
+            let context = persistenceController.newBackgroundContext()
+            await context.perform {
+                for item in items {
+                    let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
+                    if let uuid = item.uuid {
+                        request.predicate = NSPredicate(format: "id == %@", uuid as CVarArg)
+                    } else {
+                        request.predicate = NSPredicate(format: "originalPath == %@", item.url.path)
+                    }
+                    
+                    if let mediaItems = try? context.fetch(request), let mediaItem = mediaItems.first {
+                        mediaItem.colorLabel = label
+                    }
                 }
                 try? context.save()
+            }
+            
+            // Write to File (Batch)
+            let urls = items.map { $0.url }
+            // For label update, we pass rating: nil (preserve rating)
+            self.writeMetadataBatch(to: urls, rating: nil, label: label ?? "")
+            
+            await MainActor.run {
+                self.applyFilter()
             }
         }
     }
@@ -2612,59 +2659,7 @@ public class MainViewModel: ObservableObject {
     }
 
     public func setColorLabel(_ label: String?, for item: FileItem) {
-        // RAW Restriction: Only allow if in Catalog mode
-        let ext = item.url.pathExtension.lowercased()
-        let isRaw =
-            FileConstants.allowedImageExtensions.contains(ext)
-            && !["jpg", "jpeg", "png", "heic", "tiff", "gif", "webp"].contains(ext)
-
-        if isRaw && appMode != .catalog {
-            Logger.shared.log(
-                "MainViewModel: Skipped label update for RAW file in Folders mode: \(item.name)")
-            return
-        }
-
-        // Update allFiles (Source of Truth)
-        if let index = allFiles.firstIndex(where: { $0.id == item.id }) {
-            var newItem = allFiles[index]
-            newItem.colorLabel = label
-            allFiles[index] = newItem
-
-            // Update selection if needed (to keep selection valid)
-            if let oldSelected = selectedFiles.first(where: { $0.id == item.id }) {
-                selectedFiles.remove(oldSelected)
-                selectedFiles.insert(newItem)
-            }
-            if currentFile?.id == item.id {
-                currentFile = newItem
-            }
-        }
-
-        // Update fileItems (Current View)
-        if let index = fileItems.firstIndex(where: { $0.id == item.id }) {
-            var newItem = fileItems[index]
-            newItem.colorLabel = label
-            fileItems[index] = newItem
-        }
-
-        // Update Metadata Cache
-        if var meta = metadataCache[item.url] {
-            meta.colorLabel = label
-            metadataCache[item.url] = meta
-        } else {
-             // Create if missing
-            var meta = ExifMetadata()
-            meta.colorLabel = label
-            metadataCache[item.url] = meta
-        }
-
-        // Persist
-        Task {
-            persistColorLabel(label, for: item)
-            await MainActor.run {
-                self.applyFilter()
-            }
-        }
+        updateColorLabel(for: [item], label: label)
     }
 
 
@@ -2726,9 +2721,10 @@ public class MainViewModel: ObservableObject {
         var added: [URL] = []
         var removed: [URL] = []
         var updated: [URL] = []
+        var metadataMismatches: [URL] = []
 
         var totalChanges: Int {
-            added.count + removed.count + updated.count
+            added.count + removed.count + updated.count + metadataMismatches.count
         }
     }
 
@@ -2748,7 +2744,7 @@ public class MainViewModel: ObservableObject {
             // 1. Get all known files in DB
             let context = controller.newBackgroundContext()
 
-            var dbFiles: [URL: Date?] = [:]  // URL -> Modification Date
+            var dbFiles: [URL: (date: Date?, rating: Int, label: String?)] = [:]
 
             // Create request inside the block to avoid Sendable warning
             context.performAndWait {
@@ -2759,7 +2755,7 @@ public class MainViewModel: ObservableObject {
                     for item in items {
                         if let path = item.originalPath {
                             let url = URL(fileURLWithPath: path)
-                            dbFiles[url] = item.modifiedDate
+                            dbFiles[url] = (item.modifiedDate, Int(item.rating), item.colorLabel)
                         }
                     }
                 }
@@ -2799,15 +2795,141 @@ public class MainViewModel: ObservableObject {
             let fileManager = FileManager.default
 
             // Check for Removed and Updated
-            for (url, date) in dbFiles {
+            // Check for Removed, Updated, and Metadata Mismatches
+            for (url, info) in dbFiles {
                 var isDir: ObjCBool = false
                 if fileManager.fileExists(atPath: url.path, isDirectory: &isDir) {
                     if let attrs = try? fileManager.attributesOfItem(atPath: url.path),
                         let fileDate = attrs[.modificationDate] as? Date
                     {
                         // Check if updated (allow some tolerance)
-                        if let dbDate = date, fileDate.timeIntervalSince(dbDate) > 1.0 {
+                        if let dbDate = info.date, fileDate.timeIntervalSince(dbDate) > 1.0 {
                             stats.updated.append(url)
+                        }
+                        
+                        // Check Metadata Mismatches
+                        // We use ExifTool via ExifReader to ensure we read exactly what we wrote (XMP/IPTC).
+                        // CGImageSource (readExifSync) might not read XMP-xmp:Label correctly.
+                        // We also enable this for RAW files now that we use ExifTool which is robust.
+                        
+                        // Use a detached task or just call synchronous ExifTool wrapper?
+                        // Since we are already in a detached task, we can call ExifTool synchronously.
+                        // But ExifReader.readExifUsingExifTool is private or not exposed?
+                        // Let's check ExifReader. It has `readExifBatch` or `readExifUsingExifTool`.
+                        // `readExifUsingExifTool` is internal/private.
+                        // We should expose a method `readMetadataSync(from: URL)` that tries ExifTool first.
+                        
+                        // For now, let's use ExifReader.shared.readExifSync(from: url) but we need to improve IT.
+                        // Wait, I can't easily change ExifReader to use ExifTool for *everything* inside readExifSync without performance hit.
+                        // But for "Check for Updates", accuracy is more important than speed?
+                        // Or maybe we should only use ExifTool if it's a candidate for mismatch?
+                        // No, we need to know IF it's a mismatch.
+                        
+                        // Let's rely on `ExifReader.shared.readExifSync` BUT update it to use ExifTool if needed?
+                        // Or better: In this loop, we can use `ExifReader.shared.readExifUsingExifTool(from: url)` if I make it public.
+                        // Or I can add a new method `readMetadataAccurate(from: url)`.
+                        
+                        // Actually, let's look at ExifReader again.
+                        // `_readExif` (private) uses ExifTool for RAWs.
+                        // For non-RAWs (JPG), it uses CGImageSource.
+                        // But my writeMetadataBatch writes XMP to JPGs too!
+                        // So CGImageSource reading JPG might miss XMP Label.
+                        // I MUST use ExifTool for JPGs too if I want to verify XMP Label.
+                        
+                        // So, I will modify ExifReader to allow forcing ExifTool, OR I will call ExifTool here directly.
+                        // Calling ExifTool for every file in the catalog (even if not modified) is SLOW.
+                        // But wait, we only check `if fileDate > dbDate` (line 2763) for UPDATES.
+                        // For MISMATCHES, we check... wait.
+                        // Line 2763: `if let dbDate = info.date, fileDate.timeIntervalSince(dbDate) > 1.0` -> `stats.updated.append`.
+                        // Line 2767: `Check Metadata Mismatches`.
+                        // This block runs for EVERY file that exists?
+                        // No, it's inside `if fileManager.fileExists`.
+                        // It runs for EVERY file in the DB!
+                        // If I run `exiftool` for 10,000 files, it will take forever.
+                        // We should ONLY check metadata if the file modification date is DIFFERENT?
+                        // If date is same, metadata "should" be same (unless external tool touched it without changing date, which is rare/impossible).
+                        // BUT, `writeMetadataBatch` updates file. Does it update DB date?
+                        // `performCatalogUpdate` updates DB date.
+                        
+                        // If I edit in App -> Write File -> Update DB (Date + Metadata).
+                        // File Date == DB Date.
+                        // So we shouldn't need to check.
+                        
+                        // But the user says "No matter how much I sync...".
+                        // This implies `fileDate` != `dbDate`?
+                        // Or maybe the check runs regardless of date?
+                        // In the code I see:
+                        /*
+                        if let dbDate = info.date, fileDate.timeIntervalSince(dbDate) > 1.0 {
+                            stats.updated.append(url)
+                        }
+                        
+                        // Check Metadata Mismatches
+                        */
+                        // It runs ALWAYS.
+                        // This is the problem!
+                        // We should ONLY check for metadata mismatches if the date matches (or is close),
+                        // OR if we suspect something.
+                        // Actually, if date is different, it's an "Update".
+                        // If date is SAME, but metadata is different -> Mismatch?
+                        // No, if date is same, content hasn't changed.
+                        // So why check?
+                        // Maybe to detect "Metadata changed but date didn't"? (e.g. `touch -m`?)
+                        // That's rare.
+                        
+                        // However, if the user says "Mismatch detected", it means this code IS finding a difference.
+                        // If I use `exiftool` here, it will be slow.
+                        // But maybe I should only check if `fileDate` is strictly different?
+                        // No, the code separates "Updated" (Date changed) vs "Mismatch" (Content diff).
+                        
+                        // Let's look at the logic again.
+                        // If I use `readExifSync` (CGImageSource) on a JPG, and it returns `nil` for Label (because it can't read XMP),
+                        // but DB has "Red".
+                        // Then `nil != "Red"` -> Mismatch.
+                        // This happens even if Date is identical!
+                        
+                        // So I MUST fix `readExifSync` to read XMP Label correctly for JPGs.
+                        // OR I must use ExifTool.
+                        
+                        // I will modify `ExifReader.swift` to support XMP Label reading via `CGImageSource` (if possible) or fallback.
+                        // `CGImageSource` *can* read XMP if we access the `metadata` property of `CGImageSource`?
+                        // `CGImageSourceCopyPropertiesAtIndex` returns a dictionary.
+                        // `{XMP}` key might contain the raw XMP packet.
+                        // Parsing raw XMP is hard.
+                        
+                        // Alternative: Use `exiftool` but ONLY if `CGImageSource` fails to match DB?
+                        // i.e. Double Check Strategy.
+                        // If `CGImageSource` says "No Label", but DB says "Red", THEN run `exiftool` to verify if it's really "No Label" or just "Can't read".
+                        // This is efficient!
+                        
+                        // Let's implement this Double Check in `MainViewModel`.
+                        
+                        if let exif = ExifReader.shared.readExifSync(from: url) {
+                            let fileRating = exif.rating ?? 0
+                            let dbRating = info.rating
+                            
+                            let fileLabel = exif.colorLabel
+                            let dbLabel = info.label
+                            
+                            if fileRating != dbRating || fileLabel != dbLabel {
+                                // Potential mismatch.
+                                // If fileLabel is nil and dbLabel is not, it might be a read error.
+                                // Verify with ExifTool if needed.
+                                var confirmedMismatch = true
+                                
+                                if fileLabel == nil && dbLabel != nil {
+                                    // Try ExifTool
+                                    if let accurateExif = ExifReader.shared.readExifUsingExifTool(from: url) {
+                                         if accurateExif.colorLabel == dbLabel && (accurateExif.rating ?? 0) == dbRating {
+                                             confirmedMismatch = false
+                                         }
+                                    }
+                                }
+                                
+                                if confirmedMismatch {
+                                    stats.metadataMismatches.append(url)
+                                }
+                            }
                         }
                     }
                 } else {
@@ -2847,93 +2969,7 @@ public class MainViewModel: ObservableObject {
         }.value
     }
 
-    func performCatalogUpdate(catalog: Catalog, stats: CatalogUpdateStats) {
-        guard let context = catalog.managedObjectContext else { return }
 
-        Task {
-            // 1. Remove deleted
-            if !stats.removed.isEmpty {
-                await MainActor.run {
-                    // We need to fetch objects to delete
-                    let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
-                    request.predicate = NSPredicate(
-                        format: "catalog == %@ AND originalPath IN %@", catalog,
-                        stats.removed.map { $0.path })
-                    if let items = try? context.fetch(request) {
-                        for item in items {
-                            context.delete(item)
-                        }
-                    }
-                }
-            }
-
-            // 2. Add new
-            if !stats.added.isEmpty {
-                // We can use import logic, but we need to be careful not to duplicate.
-                // We already know they are new.
-                // Batch insert is faster.
-                await MainActor.run {
-                    for url in stats.added {
-                        let item = MediaItem(context: context)
-                        item.id = UUID()
-                        item.originalPath = url.path
-                        item.fileName = url.lastPathComponent
-                        item.catalog = catalog
-                        item.importDate = Date()
-
-                        // Basic metadata
-                        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) {
-                            item.fileSize = (attrs[.size] as? Int64) ?? 0
-                            item.modifiedDate = attrs[.modificationDate] as? Date
-                        }
-
-                        // We should trigger metadata loading later
-                    }
-                }
-            }
-
-            // 3. Update existing
-            if !stats.updated.isEmpty {
-                await MainActor.run {
-                    let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
-                    request.predicate = NSPredicate(
-                        format: "catalog == %@ AND originalPath IN %@", catalog,
-                        stats.updated.map { $0.path })
-                    if let items = try? context.fetch(request) {
-                        for item in items {
-                            if let path = item.originalPath,
-                                let attrs = try? FileManager.default.attributesOfItem(atPath: path)
-                            {
-                                item.modifiedDate = attrs[.modificationDate] as? Date
-                                item.fileSize = (attrs[.size] as? Int64) ?? 0
-                                // Invalidate cache/preview?
-                            }
-                        }
-                    }
-                }
-            }
-
-            await MainActor.run {
-                try? context.save()
-
-                // Refresh view if current catalog
-                if currentCatalog == catalog {
-                    loadMediaItems(from: catalog)
-                    loadCollections(for: catalog)
-                }
-
-                // Trigger metadata update for new/updated items
-                let allToUpdate = stats.added + stats.updated
-                if !allToUpdate.isEmpty {
-                    // We need to map URLs to FileItems or just call populateMetadataCache with URLs?
-                    // populateMetadataCache takes [FileItem].
-                    // We can create temporary FileItems or add a method to update by URL.
-                    // For now, just let the view refresh handle it?
-                    // View refresh will create FileItems.
-                }
-            }
-        }
-    }
 
     func cleanup() {
         FileSystemMonitor.shared.stopMonitoring()
@@ -3097,9 +3133,13 @@ public class MainViewModel: ObservableObject {
                 Logger.shared.log("MainViewModel: Deleted folder \(url.path)")
 
                 await MainActor.run {
-                    // If current folder was deleted, go up?
-                    if self.currentFolder?.url == url {
-                        self.currentFolder = nil
+                    // If current folder was deleted or is a subfolder, clear it
+                    if let current = self.currentFolder {
+                        let currentPath = current.url.path
+                        let deletedPath = url.path
+                        if currentPath == deletedPath || currentPath.hasPrefix(deletedPath + "/") {
+                            self.currentFolder = nil
+                        }
                     }
                     
                     self.isBlockingOperation = false
@@ -3135,16 +3175,373 @@ public class MainViewModel: ObservableObject {
             self.showError = true
         }
     }
+    // MARK: - Catalog Sync Feature
+    
+    @Published var showUpdateConfirmation = false
+    @Published var updateStats: CatalogUpdateStats?
+    @Published var catalogToUpdate: Catalog?
+    @Published var isSyncingCatalog = false
+    
+    // Unified check method (called by both Context Menu and Tools Menu)
+    func triggerCatalogUpdateCheck(for catalog: Catalog? = nil) {
+        let target = catalog ?? currentCatalog
+        guard let target = target else { return }
+        catalogToUpdate = target
+        
+        Task {
+            let stats = await checkForUpdates(catalog: target)
+            await MainActor.run {
+                self.updateStats = stats
+                self.showUpdateConfirmation = true
+            }
+        }
+    }
+    
+    // Legacy method removed or redirected
+    func checkForMetadataMismatches() {
+        triggerCatalogUpdateCheck()
+    }
+    
+    // ... (checkForUpdates implementation is fine, but we need to ensure it returns stats)
+    
+    enum MetadataResolutionStrategy {
+        case preferCatalog
+        case preferFile
+    }
+
+    func performCatalogUpdate(catalog: Catalog, stats: CatalogUpdateStats, strategy: MetadataResolutionStrategy? = nil) {
+        guard let context = catalog.managedObjectContext else { return }
+        isSyncingCatalog = true
+        
+        Task {
+            // 1. Remove deleted
+            if !stats.removed.isEmpty {
+                await MainActor.run {
+                    let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
+                    request.predicate = NSPredicate(
+                        format: "catalog == %@ AND originalPath IN %@", catalog,
+                        stats.removed.map { $0.path })
+                    if let items = try? context.fetch(request) {
+                        for item in items {
+                            context.delete(item)
+                        }
+                    }
+                }
+            }
+            
+            // 2. Add new
+            if !stats.added.isEmpty {
+                await MainActor.run {
+                    for url in stats.added {
+                        let item = MediaItem(context: context)
+                        item.id = UUID()
+                        item.originalPath = url.path
+                        item.fileName = url.lastPathComponent
+                        item.catalog = catalog
+                        item.importDate = Date()
+                        
+                        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) {
+                            item.fileSize = (attrs[.size] as? Int64) ?? 0
+                            item.modifiedDate = attrs[.modificationDate] as? Date
+                        }
+                    }
+                }
+            }
+            
+            // 3. Update existing (File -> DB)
+            if !stats.updated.isEmpty {
+                await MainActor.run {
+                    let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
+                    request.predicate = NSPredicate(
+                        format: "catalog == %@ AND originalPath IN %@", catalog,
+                        stats.updated.map { $0.path })
+                    
+                    if let items = try? context.fetch(request) {
+                        for item in items {
+                            if let path = item.originalPath {
+                                let url = URL(fileURLWithPath: path)
+                                if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) {
+                                    item.fileSize = (attrs[.size] as? Int64) ?? 0
+                                    item.modifiedDate = attrs[.modificationDate] as? Date
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // 4. Sync Metadata
+            if !stats.metadataMismatches.isEmpty, let strategy = strategy {
+                await MainActor.run {
+                    let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
+                    request.predicate = NSPredicate(
+                        format: "catalog == %@ AND originalPath IN %@", catalog,
+                        stats.metadataMismatches.map { $0.path })
+                    
+                    if let items = try? context.fetch(request) {
+                        for item in items {
+                            guard let path = item.originalPath else { continue }
+                            let url = URL(fileURLWithPath: path)
+                            
+                            switch strategy {
+                            case .preferFile:
+                                // Read from File -> DB
+                                if let exif = ExifReader.shared.readExifSync(from: url) {
+                                    item.rating = Int16(exif.rating ?? 0)
+                                    item.colorLabel = exif.colorLabel
+                                    // Update DB modified date to match file
+                                    if let attrs = try? FileManager.default.attributesOfItem(atPath: path) {
+                                        item.modifiedDate = attrs[.modificationDate] as? Date
+                                    }
+                                }
+                                
+                            case .preferCatalog:
+                                // Write DB -> File
+                                let rating = Int(item.rating)
+                                let label = item.colorLabel
+                                
+                                // Write to file (non-isolated call)
+                                self.writeMetadata(to: url, rating: rating, label: label)
+                                
+                                // Invalidate cache so UI updates if it re-reads
+                                ExifReader.shared.invalidateCache(for: url)
+                                
+                                // Update DB modified date to new file date
+                                if let attrs = try? FileManager.default.attributesOfItem(atPath: path) {
+                                    item.modifiedDate = attrs[.modificationDate] as? Date
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            try? context.save()
+            
+            await MainActor.run {
+                self.isSyncingCatalog = false
+                self.showUpdateConfirmation = false
+                // Refresh view if current catalog
+                if self.currentCatalog == catalog {
+                    self.loadMediaItems(from: catalog)
+                }
+            }
+        }
+    }
+    
+    nonisolated private func writeMetadata(to url: URL, rating: Int, label: String?) {
+        // Find ExifTool
+        let paths = ["/usr/local/bin/exiftool", "/opt/homebrew/bin/exiftool", "/usr/bin/exiftool"]
+        var exifToolPath = "/usr/local/bin/exiftool"
+        for path in paths {
+            if FileManager.default.fileExists(atPath: path) {
+                exifToolPath = path
+                break
+            }
+        }
+        
+        var args = ["-overwrite_original"]
+        
+        // Handle Rating
+        if rating > 0 {
+            args.append("-Rating=\(rating)")
+            args.append("-XMP:Rating=\(rating)")
+        } else {
+            // Clear rating if 0
+            args.append("-Rating=")
+            args.append("-XMP:Rating=")
+        }
+        
+        // Handle Label
+        if let label = label, !label.isEmpty {
+            args.append("-Label=\(label)")
+            args.append("-XMP:Label=\(label)")
+            args.append("-XMP-xmp:Label=\(label)")
+            
+            // Map to Urgency for backward compatibility
+            var urgency: Int?
+            switch label.lowercased() {
+            case "red": urgency = 1
+            case "orange": urgency = 2
+            case "yellow": urgency = 3
+            case "green": urgency = 4
+            case "blue": urgency = 5
+            case "purple": urgency = 6
+            case "gray": urgency = 7
+            default: urgency = nil
+            }
+            
+            if let u = urgency {
+                args.append("-Photoshop:Urgency=\(u)")
+            }
+        } else {
+            // Clear label if nil or empty
+            args.append("-Label=")
+            args.append("-XMP:Label=")
+            args.append("-XMP-xmp:Label=")
+            args.append("-Photoshop:Urgency=")
+        }
+        
+        Logger.shared.log("ExifTool Writing to \(url.lastPathComponent): \(args)")
+        
+        args.append(url.path)
+        
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: exifToolPath)
+        process.arguments = args
+        process.environment = ProcessInfo.processInfo.environment
+        
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe // Capture stderr too
+        
+        do {
+            try process.run()
+            process.waitUntilExit()
+            
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if let output = String(data: data, encoding: .utf8), !output.isEmpty {
+                Logger.shared.log("ExifTool Output: \(output)")
+            }
+            
+            // Sync with Finder Label
+            var labelNumber: Int?
+            if let label = label {
+                switch label.lowercased() {
+                case "red": labelNumber = 6
+                case "orange": labelNumber = 7
+                case "yellow": labelNumber = 5
+                case "green": labelNumber = 2
+                case "blue": labelNumber = 4
+                case "purple": labelNumber = 3
+                case "gray": labelNumber = 1
+                case "none", "": labelNumber = 0
+                default: labelNumber = 0
+                }
+            } else {
+                labelNumber = 0
+            }
+            
+            if let number = labelNumber {
+                var url = url
+                var values = URLResourceValues()
+                values.labelNumber = number
+                try? url.setResourceValues(values)
+            }
+            
+        } catch {
+            Logger.shared.log("ExifTool Failed: \(error)")
+        }
+    }
+    
+    nonisolated private func writeMetadataBatch(to urls: [URL], rating: Int?, label: String?) {
+        guard !urls.isEmpty else { return }
+        
+        // Find ExifTool
+        let paths = ["/usr/local/bin/exiftool", "/opt/homebrew/bin/exiftool", "/usr/bin/exiftool"]
+        var exifToolPath = "/usr/local/bin/exiftool"
+        for path in paths {
+            if FileManager.default.fileExists(atPath: path) {
+                exifToolPath = path
+                break
+            }
+        }
+
+        var args = ["-overwrite_original"]
+
+        // Handle Rating
+        if let rating = rating {
+            if rating > 0 {
+                args.append("-Rating=\(rating)")
+                args.append("-XMP:Rating=\(rating)")
+            } else {
+                args.append("-Rating=")
+                args.append("-XMP:Rating=")
+            }
+        }
+
+        // Handle Label
+        if let label = label {
+            if !label.isEmpty {
+                args.append("-Label=\(label)")
+                args.append("-XMP:Label=\(label)")
+                args.append("-XMP-xmp:Label=\(label)")
+
+                // Map to Urgency
+                var urgency: Int?
+                switch label.lowercased() {
+                case "red": urgency = 1
+                case "orange": urgency = 2
+                case "yellow": urgency = 3
+                case "green": urgency = 4
+                case "blue": urgency = 5
+                case "purple": urgency = 6
+                case "gray": urgency = 7
+                default: urgency = nil
+                }
+
+                if let u = urgency {
+                    args.append("-Photoshop:Urgency=\(u)")
+                }
+            } else {
+                args.append("-Label=")
+                args.append("-XMP:Label=")
+                args.append("-XMP-xmp:Label=")
+                args.append("-Photoshop:Urgency=")
+            }
+        }
+
+        // Append all file paths
+        args.append(contentsOf: urls.map { $0.path })
+
+        Logger.shared.log("ExifTool Batch Writing to \(urls.count) files: \(args)")
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: exifToolPath)
+        process.arguments = args
+        process.environment = ProcessInfo.processInfo.environment
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            
+            // Sync Finder Labels
+            if let label = label {
+                var labelNumber: Int?
+                switch label.lowercased() {
+                case "red": labelNumber = 6
+                case "orange": labelNumber = 7
+                case "yellow": labelNumber = 5
+                case "green": labelNumber = 2
+                case "blue": labelNumber = 4
+                case "purple": labelNumber = 3
+                case "gray": labelNumber = 1
+                case "none", "": labelNumber = 0
+                default: labelNumber = 0
+                }
+                
+                if let number = labelNumber {
+                    for var url in urls {
+                        var values = URLResourceValues()
+                        values.labelNumber = number
+                        try? url.setResourceValues(values)
+                    }
+                }
+            }
+            
+        } catch {
+            Logger.shared.log("ExifTool Batch failed to run: \(error)")
+        }
+    }
+
     // MARK: - File Operations Helpers
 
     nonisolated private func countFiles(at url: URL) -> Int {
         var count = 0
-        if let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.isDirectoryKey]) {
-            for case let fileURL as URL in enumerator {
-                if let resourceValues = try? fileURL.resourceValues(forKeys: [.isDirectoryKey]),
-                   let isDirectory = resourceValues.isDirectory, !isDirectory {
-                    count += 1
-                }
+        // Count both files and directories to ensure progress bar moves for folder structures
+        if let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil) {
+            for _ in enumerator {
+                count += 1
             }
         }
         return count
@@ -3152,14 +3549,11 @@ public class MainViewModel: ObservableObject {
     
     nonisolated private func copyWithProgress(from source: URL, to destination: URL, totalItems: Int, currentCount: inout Int) async throws {
         let fileManager = FileManager.default
-        
-        // Check if directory
         var isDir: ObjCBool = false
         if fileManager.fileExists(atPath: source.path, isDirectory: &isDir), isDir.boolValue {
-            // Create directory
             try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+            currentCount += 1
             
-            // Enumerate content
             let options: FileManager.DirectoryEnumerationOptions = [.skipsHiddenFiles]
             let contents = try fileManager.contentsOfDirectory(at: source, includingPropertiesForKeys: nil, options: options)
             
@@ -3168,23 +3562,66 @@ public class MainViewModel: ObservableObject {
                 try await copyWithProgress(from: item, to: destItem, totalItems: totalItems, currentCount: &currentCount)
             }
         } else {
-            // Copy file
-            try fileManager.copyItem(at: source, to: destination)
-            currentCount += 1
-            
-            // Update progress (Throttle: every 10 items or last item)
-            if totalItems > 0 && (currentCount % 10 == 0 || currentCount == totalItems) {
-                let progress = Double(currentCount) / Double(totalItems)
-                let count = currentCount
-                await MainActor.run {
-                    self.blockingOperationProgress = progress
-                    self.blockingOperationMessage = "Copying \(count) of \(totalItems) items..."
-                }
-                // Small sleep to ensure UI has time to render if loop is very tight
-                if currentCount % 100 == 0 {
-                    try? await Task.sleep(nanoseconds: 1_000_000) // 1ms
-                }
+            // Use chunked copy
+            let count = currentCount // Capture value to avoid inout capture in escaping closure
+            try await copyFileWithProgress(from: source, to: destination, fileSize: 0) { fileProgress in
+                 if totalItems > 0 {
+                     let globalProgress = (Double(count) + fileProgress) / Double(totalItems)
+                     Task { @MainActor in
+                         self.blockingOperationProgress = globalProgress
+                         self.blockingOperationMessage = "Processing \(count) of \(totalItems) items..."
+                     }
+                 }
             }
+            currentCount += 1
+        }
+    }
+    
+    nonisolated private func copyFileWithProgress(from source: URL, to destination: URL, fileSize: Int64, progressHandler: ((Double) -> Void)? = nil) async throws {
+        let bufferSize = 1024 * 1024 // 1MB
+        let fileManager = FileManager.default
+        
+        // Create destination directory if needed (shouldn't be needed for file copy, but safety)
+        let destDir = destination.deletingLastPathComponent()
+        if !fileManager.fileExists(atPath: destDir.path) {
+            try fileManager.createDirectory(at: destDir, withIntermediateDirectories: true)
+        }
+        
+        // Use FileHandle for reading and writing
+        let readHandle = try FileHandle(forReadingFrom: source)
+        defer { try? readHandle.close() }
+        
+        // Create empty file
+        fileManager.createFile(atPath: destination.path, contents: nil)
+        let writeHandle = try FileHandle(forWritingTo: destination)
+        defer { try? writeHandle.close() }
+        
+        var bytesWritten: Int64 = 0
+        let totalBytes = fileSize > 0 ? fileSize : (try? fileManager.attributesOfItem(atPath: source.path)[.size] as? Int64) ?? 0
+        
+        // Loop
+        while true {
+            if Task.isCancelled { throw CancellationError() }
+            
+            let data = try readHandle.read(upToCount: bufferSize)
+            guard let data = data, !data.isEmpty else { break }
+            
+            try writeHandle.write(contentsOf: data)
+            bytesWritten += Int64(data.count)
+            
+            // Update Progress
+            if totalBytes > 0 {
+                let progress = Double(bytesWritten) / Double(totalBytes)
+                progressHandler?(progress)
+            }
+        }
+        
+        // Copy attributes (creation date, modification date, permissions)
+        do {
+            let attributes = try fileManager.attributesOfItem(atPath: source.path)
+            try fileManager.setAttributes(attributes, ofItemAtPath: destination.path)
+        } catch {
+            Logger.shared.log("Warning: Failed to copy attributes for \(source.lastPathComponent): \(error)")
         }
     }
     
@@ -3220,6 +3657,13 @@ public class MainViewModel: ObservableObject {
                 } catch {
                     Logger.shared.log("Catalog Update: Failed to save context: \(error)")
                 }
+            }
+        }
+        
+        // Trigger Catalog Refresh if active
+        await MainActor.run {
+            if self.appMode == .catalog, let catalog = self.currentCatalog {
+                self.loadMediaItems(from: catalog)
             }
         }
     }

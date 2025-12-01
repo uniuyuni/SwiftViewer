@@ -63,62 +63,7 @@ public struct MainWindow: View {
 
     private var mainContent: some View {
         ZStack {
-            NavigationSplitView(columnVisibility: $viewModel.columnVisibility) {
-                SidebarView(viewModel: viewModel)
-            } detail: {
-                detailContent
-            }
-            .frame(minWidth: 900, minHeight: 600) // Reduced minWidth
-            .onChange(of: viewModel.currentFolder) { _, newFolder in
-                if let folder = newFolder {
-                    viewModel.openFolder(folder)
-                }
-            }
-            .onChange(of: viewModel.currentCatalog) { _, newCatalog in
-                if let catalog = newCatalog {
-                    viewModel.openCatalog(catalog)
-                }
-            }
-            .background {
-                hiddenControls
-            }
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Slider(value: $viewModel.thumbnailSize, in: 50...300)
-                        .frame(width: 100)
-                }
-            }
-            .onChange(of: viewModel.filterCriteria.minRating) { _, _ in viewModel.applyFilter() }
-            .onChange(of: viewModel.filterCriteria.colorLabel) { _, _ in viewModel.applyFilter() }
-            .focusedSceneValue(\.toggleInspector) {
-                withAnimation {
-                    viewModel.toggleInspector()
-                }
-            }
-            .alert("Move Files", isPresented: $viewModel.showMoveFilesConfirmation) {
-                Button("Move", role: .destructive) {
-                    viewModel.confirmMoveFiles()
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                if let dest = viewModel.fileOpDestination {
-                    Text("Are you sure you want to move \(viewModel.filesToMove.count) files to \"\(dest.lastPathComponent)\"?")
-                } else {
-                    Text("Are you sure you want to move these files?")
-                }
-            }
-            .alert("Copy Files", isPresented: $viewModel.showCopyFilesConfirmation) {
-                Button("Copy") {
-                    viewModel.confirmCopyFiles()
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                if let dest = viewModel.fileOpDestination {
-                    Text("Are you sure you want to copy \(viewModel.filesToCopy.count) files to \"\(dest.lastPathComponent)\"?")
-                } else {
-                    Text("Are you sure you want to copy these files?")
-                }
-            }
+            splitView
             
             if viewModel.isBlockingOperation {
                 BlockingOperationView(
@@ -128,6 +73,45 @@ public struct MainWindow: View {
                 .zIndex(100) // Ensure it's on top
             }
         }
+    }
+    
+    private var splitView: some View {
+        NavigationSplitView(columnVisibility: $viewModel.columnVisibility) {
+            SidebarView(viewModel: viewModel)
+        } detail: {
+            detailContent
+        }
+        .frame(minWidth: 900, minHeight: 600) // Reduced minWidth
+        .onChange(of: viewModel.currentFolder) { _, newFolder in
+            if let folder = newFolder {
+                viewModel.openFolder(folder)
+            }
+        }
+        .onChange(of: viewModel.currentCatalog) { _, newCatalog in
+            if let catalog = newCatalog {
+                viewModel.openCatalog(catalog)
+            }
+        }
+        .background {
+            hiddenControls
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Slider(value: $viewModel.thumbnailSize, in: 50...300)
+                    .frame(width: 100)
+            }
+        }
+        .onChange(of: viewModel.filterCriteria.minRating) { _, _ in viewModel.applyFilter() }
+        .onChange(of: viewModel.filterCriteria.colorLabel) { _, _ in viewModel.applyFilter() }
+        .focusedSceneValue(\.toggleInspector) {
+            withAnimation {
+                viewModel.toggleInspector()
+            }
+        }
+        .focusedSceneValue(\.updateCatalog) {
+            viewModel.triggerCatalogUpdateCheck()
+        }
+        .modifier(MainWindowAlerts(viewModel: viewModel))
     }
     
     @ViewBuilder
@@ -212,6 +196,70 @@ public struct MainWindow: View {
         Button("Toggle Layout") { viewModel.togglePreviewLayout() }
             .keyboardShortcut(.tab, modifiers: .shift)
             .hidden()
+    }
+}
+
+struct MainWindowAlerts: ViewModifier {
+    @ObservedObject var viewModel: MainViewModel
+    
+    func body(content: Content) -> some View {
+        content
+            .alert("Move Files", isPresented: $viewModel.showMoveFilesConfirmation) {
+                Button("Move", role: .destructive) {
+                    viewModel.confirmMoveFiles()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                if let dest = viewModel.fileOpDestination {
+                    Text("Are you sure you want to move \(viewModel.filesToMove.count) files to \"\(dest.lastPathComponent)\"?")
+                } else {
+                    Text("Are you sure you want to move these files?")
+                }
+            }
+            .alert("Copy Files", isPresented: $viewModel.showCopyFilesConfirmation) {
+                Button("Copy") {
+                    viewModel.confirmCopyFiles()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                if let dest = viewModel.fileOpDestination {
+                    Text("Are you sure you want to copy \(viewModel.filesToCopy.count) files to \"\(dest.lastPathComponent)\"?")
+                } else {
+                    Text("Are you sure you want to copy these files?")
+                }
+            }
+            .alert("Update Catalog", isPresented: $viewModel.showUpdateConfirmation) {
+                if let stats = viewModel.updateStats, !stats.metadataMismatches.isEmpty {
+                    Button("Update (Use Catalog Settings)", role: .destructive) {
+                        if let catalog = viewModel.catalogToUpdate {
+                            viewModel.performCatalogUpdate(catalog: catalog, stats: stats, strategy: .preferCatalog)
+                        }
+                    }
+                    Button("Update (Use File Settings)") {
+                        if let catalog = viewModel.catalogToUpdate {
+                            viewModel.performCatalogUpdate(catalog: catalog, stats: stats, strategy: .preferFile)
+                        }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } else {
+                    Button("Update", role: .destructive) {
+                        if let catalog = viewModel.catalogToUpdate, let stats = viewModel.updateStats {
+                            viewModel.performCatalogUpdate(catalog: catalog, stats: stats)
+                        }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                }
+            } message: {
+                if let stats = viewModel.updateStats {
+                    if !stats.metadataMismatches.isEmpty {
+                        Text("Found changes:\nAdded: \(stats.added.count)\nDeleted: \(stats.removed.count)\nUpdated: \(stats.updated.count)\n\nMetadata Mismatches: \(stats.metadataMismatches.count)\n\nThere are metadata conflicts. Choose 'Use Catalog Settings' to overwrite files with catalog data, or 'Use File Settings' to update catalog from files.")
+                    } else {
+                        Text("Found changes:\nAdded: \(stats.added.count)\nDeleted: \(stats.removed.count)\nUpdated: \(stats.updated.count)")
+                    }
+                } else {
+                    Text("Scanning...")
+                }
+            }
     }
 }
 

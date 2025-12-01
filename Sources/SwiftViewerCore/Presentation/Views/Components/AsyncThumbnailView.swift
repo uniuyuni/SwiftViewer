@@ -41,21 +41,9 @@ struct AsyncThumbnailView: View {
     }
     
     private func angleForOrientation(_ orientation: Int?) -> Angle {
-        guard let orientation = orientation else { return .zero }
-        
-        // Only apply manual rotation for RAW files
-        // Standard files (JPG, HEIC) are handled by ThumbnailGenerator (CGImageSource) which applies transform.
-        let ext = url.pathExtension.lowercased()
-        let isRaw = FileConstants.allowedImageExtensions.contains(ext) && !["jpg", "jpeg", "png", "heic", "tiff", "gif", "webp"].contains(ext)
-        
-        guard isRaw else { return .zero }
-        
-        switch orientation {
-        case 3, 4: return .degrees(180)
-        case 6, 5: return .degrees(90)
-        case 8, 7: return .degrees(-90)
-        default: return .zero
-        }
+        // ThumbnailGenerator now handles rotation via applyTransform: true for RAWs.
+        // So we don't need manual rotation here anymore.
+        return .zero
     }
     
     private func loadThumbnail() async {

@@ -628,7 +628,14 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
         copyProgress = 0.0
         statusMessage = "Copying \(filesToCopy.count) items..."
         
-        Task {
+        // Capture values for detached task
+        let organizeByDate = self.organizeByDate
+        let splitEvents = self.splitEvents
+        let eventSplitGap = self.eventSplitGap
+        let addToCatalog = self.addToCatalog
+        let selectedCatalog = self.selectedCatalog
+        
+        Task.detached(priority: .userInitiated) {
             let total = Double(filesToCopy.count)
             var current = 0.0
             var copiedURLs: [URL] = []
@@ -782,7 +789,8 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
                     self.statusMessage = "Adding to Catalog..."
                 }
                 let catalogID = catalog.objectID
-                try? await mediaRepository.importMediaItems(from: copiedURLs, to: catalogID)
+                let repository = MediaRepository() // Create new instance for background task
+                try? await repository.importMediaItems(from: copiedURLs, to: catalogID)
             }
             
             await MainActor.run {
