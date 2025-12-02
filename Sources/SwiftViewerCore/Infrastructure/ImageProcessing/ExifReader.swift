@@ -256,6 +256,17 @@ class ExifReader {
     
     // MARK: - ExifTool Integration
     
+    // Explicitly list tags to ensure consistent behavior (Numeric vs String)
+    private let exifTags = [
+        "-Make", "-Model", "-LensModel", "-Software",
+        "-FocalLength#", "-FNumber#", "-ExposureTime#", "-ISO#", // Numeric for calculations
+        "-DateTimeOriginal",
+        "-RawImageWidth#", "-RawImageHeight#", "-ExifImageWidth#", "-ExifImageHeight#", "-ImageWidth#", "-ImageHeight#", // Numeric for dimensions
+        "-Orientation#", // Numeric for robust rotation logic
+        "-MeteringMode", "-Flash", "-WhiteBalance", "-ExposureProgram", "-ExposureCompensation#", // Strings for display (except ExpComp)
+        "-Rating", "-Label", "-Urgency"
+    ]
+    
     func readExifBatch(from urls: [URL]) async -> [URL: ExifMetadata] {
         guard !urls.isEmpty else { return [:] }
         
@@ -284,9 +295,16 @@ class ExifReader {
     
     private func readExifBatchChunk(from urls: [URL]) -> [URL: ExifMetadata] {
         log("ExifReader: Reading batch chunk of \(urls.count) files")
+        
+        guard let exifToolPath = getExifToolPath() else {
+            log("ExifReader: ExifTool not found for batch read")
+            return [:]
+        }
+        
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/local/bin/exiftool")
-        var args = ["-j", "-struct"] // Use -struct for structured output
+        process.executableURL = URL(fileURLWithPath: exifToolPath)
+        var args = ["-j", "-struct"]
+        args.append(contentsOf: exifTags) // Use explicit tags
         args.append(contentsOf: urls.map { $0.path })
         process.arguments = args
         
@@ -315,105 +333,7 @@ class ExifReader {
                 guard let sourceFile = output["SourceFile"] as? String else { continue }
                 let url = URL(fileURLWithPath: sourceFile)
                 
-                var meta = ExifMetadata()
-                meta.rawProps = output // Store raw dictionary for debugging/advanced use
-                
-                // Basic Fields
-                meta.cameraMake = output["Make"] as? String
-                meta.cameraModel = output["Model"] as? String
-                meta.lensModel = output["LensModel"] as? String
-                meta.software = output["Software"] as? String
-                
-                // Focal Length
-                if let fl = output["FocalLength"] as? Double {
-                    meta.focalLength = fl
-                } else if let flStr = output["FocalLength"] as? String {
-                    // "10.0 mm" -> 10.0
-                    let val = flStr.replacingOccurrences(of: " mm", with: "")
-                    meta.focalLength = Double(val)
-                }
-                
-                // Aperture
-                if let fn = output["FNumber"] as? Double {
-                    meta.aperture = fn
-                } else if let fnStr = output["FNumber"] as? String {
-                    // "2.8" or "f/2.8"
-                    let val = fnStr.replacingOccurrences(of: "f/", with: "")
-                    meta.aperture = Double(val)
-                }
-                
-                // Shutter Speed (Keep as String for display, e.g. "1/100")
-                if let et = output["ExposureTime"] as? String {
-                    meta.shutterSpeed = et
-                } else if let et = output["ExposureTime"] as? Double {
-                    meta.shutterSpeed = formatShutterSpeed(et)
-                }
-                
-                // ISO
-                if let iso = output["ISO"] as? Int {
-                    meta.iso = iso
-                } else if let isoStr = output["ISO"] as? String {
-                    meta.iso = Int(isoStr)
-                }
-                
-                // Dimensions
-                let w = (output["RawImageWidth"] as? Int) ?? (output["ExifImageWidth"] as? Int) ?? (output["ImageWidth"] as? Int)
-                let h = (output["RawImageHeight"] as? Int) ?? (output["ExifImageHeight"] as? Int) ?? (output["ImageHeight"] as? Int)
-                
-                // Orientation
-                var orient = 1
-                if let o = output["Orientation"] as? Int {
-                    orient = o
-                } else if let oStr = output["Orientation"] as? String {
-                    // Parse String: "Horizontal (normal)", "Rotate 90 CW", etc.
-                    if oStr.contains("90 CW") { orient = 6 }
-                    else if oStr.contains("270 CW") || oStr.contains("90 CCW") { orient = 8 }
-                    else if oStr.contains("180") { orient = 3 }
-                    else if oStr.contains("Horizontal") { orient = 1 }
-                    // Add more if needed, but these are standard
-                }
-                
-                // Swap dimensions if rotated
-                if [5, 6, 7, 8].contains(orient) {
-                    meta.width = h
-                    meta.height = w
-                } else {
-                    meta.width = w
-                    meta.height = h
-                }
-                meta.orientation = orient
-                
-                // Date
-                if let dateStr = output["DateTimeOriginal"] as? String {
-                    meta.dateTimeOriginal = parseDate(dateStr)
-                }
-                
-                // Extended Fields (Strings)
-                meta.meteringMode = output["MeteringMode"] as? String
-                meta.flash = output["Flash"] as? String
-                meta.whiteBalance = output["WhiteBalance"] as? String
-                meta.exposureProgram = output["ExposureProgram"] as? String
-                meta.exposureCompensation = output["ExposureCompensation"] as? Double
-                
-                // Rating
-                meta.rating = output["Rating"] as? Int
-                
-                // Label
-                if let label = output["Label"] as? String {
-                    meta.colorLabel = label
-                } else if let urgency = output["Urgency"] as? Int {
-                     switch urgency {
-                     case 1: meta.colorLabel = "Red"
-                     case 2: meta.colorLabel = "Orange"
-                     case 3: meta.colorLabel = "Yellow"
-                     case 4: meta.colorLabel = "Green"
-                     case 5: meta.colorLabel = "Blue"
-                     case 6: meta.colorLabel = "Purple"
-                     case 7: meta.colorLabel = "Gray"
-                     default: break
-                     }
-                }
-                
+                let meta = parseExifToolOutput(output)
                 metadataMap[url] = meta
             }
             
@@ -457,8 +377,11 @@ class ExifReader {
         
         let process = Process()
         process.executableURL = URL(fileURLWithPath: exifToolPath)
-        // Use -n for numeric output, NO -g (flat JSON)
-        process.arguments = ["-j", "-n", url.path]
+        // Use explicit tags, NO -n (since we use # suffixes), NO -g
+        var args = ["-j"]
+        args.append(contentsOf: exifTags)
+        args.append(url.path)
+        process.arguments = args
         process.environment = ProcessInfo.processInfo.environment // Inherit environment (PATH, etc.)
         
         let pipe = Pipe()
@@ -483,105 +406,8 @@ class ExifReader {
                 if let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [[String: Any]],
                    let output = json.first {
                     
-                    var meta = ExifMetadata()
-                    meta.rawProps = output // Store raw dictionary for debugging/advanced use
-                    
-                    // Basic Fields
-                    meta.cameraMake = output["Make"] as? String
-                    meta.cameraModel = output["Model"] as? String
-                    meta.lensModel = output["LensModel"] as? String
-                    meta.software = output["Software"] as? String
-                    
-                    // Focal Length
-                    if let fl = output["FocalLength"] as? Double {
-                        meta.focalLength = fl
-                    } else if let flStr = output["FocalLength"] as? String {
-                        // "10.0 mm" -> 10.0
-                        let val = flStr.replacingOccurrences(of: " mm", with: "")
-                        meta.focalLength = Double(val)
-                    }
-                    
-                    // Aperture
-                    if let fn = output["FNumber"] as? Double {
-                        meta.aperture = fn
-                    } else if let fnStr = output["FNumber"] as? String {
-                        // "2.8" or "f/2.8"
-                        let val = fnStr.replacingOccurrences(of: "f/", with: "")
-                        meta.aperture = Double(val)
-                    }
-                    
-                    // Shutter Speed (Keep as String for display, e.g. "1/100")
-                    if let et = output["ExposureTime"] as? String {
-                        meta.shutterSpeed = et
-                    } else if let et = output["ExposureTime"] as? Double {
-                        meta.shutterSpeed = formatShutterSpeed(et)
-                    }
-                    
-                    // ISO
-                    if let iso = output["ISO"] as? Int {
-                        meta.iso = iso
-                    } else if let isoStr = output["ISO"] as? String {
-                        meta.iso = Int(isoStr)
-                    }
-                    
-                    // Dimensions
-                    let w = (output["RawImageWidth"] as? Int) ?? (output["ExifImageWidth"] as? Int) ?? (output["ImageWidth"] as? Int)
-                    let h = (output["RawImageHeight"] as? Int) ?? (output["ExifImageHeight"] as? Int) ?? (output["ImageHeight"] as? Int)
-                    
-                    // Orientation
-                    var orient = 1
-                    if let o = output["Orientation"] as? Int {
-                        orient = o
-                    } else if let oStr = output["Orientation"] as? String {
-                        // Parse String: "Horizontal (normal)", "Rotate 90 CW", etc.
-                        if oStr.contains("90 CW") { orient = 6 }
-                        else if oStr.contains("270 CW") || oStr.contains("90 CCW") { orient = 8 }
-                        else if oStr.contains("180") { orient = 3 }
-                        else if oStr.contains("Horizontal") { orient = 1 }
-                    }
-                    
-                    // Swap dimensions if rotated
-                    if [5, 6, 7, 8].contains(orient) {
-                        meta.width = h
-                        meta.height = w
-                    } else {
-                        meta.width = w
-                        meta.height = h
-                    }
-                    meta.orientation = orient
-                    
-                    // Date
-                    if let dateStr = output["DateTimeOriginal"] as? String {
-                        meta.dateTimeOriginal = parseDate(dateStr)
-                    }
-                    
-                    // Extended Fields (Strings)
-                    meta.meteringMode = output["MeteringMode"] as? String
-                    meta.flash = output["Flash"] as? String
-                    meta.whiteBalance = output["WhiteBalance"] as? String
-                    meta.exposureProgram = output["ExposureProgram"] as? String
-                    meta.exposureCompensation = output["ExposureCompensation"] as? Double
-                    
-                    // Rating
-                    meta.rating = output["Rating"] as? Int
-                    
-                    // Label
-                    if let label = output["Label"] as? String {
-                        meta.colorLabel = label
-                    } else if let urgency = output["Urgency"] as? Int {
-                         switch urgency {
-                         case 1: meta.colorLabel = "Red"
-                         case 2: meta.colorLabel = "Orange"
-                         case 3: meta.colorLabel = "Yellow"
-                         case 4: meta.colorLabel = "Green"
-                         case 5: meta.colorLabel = "Blue"
-                         case 6: meta.colorLabel = "Purple"
-                         case 7: meta.colorLabel = "Gray"
-                         default: break
-                         }
-                    }
-                    
-                    log("ExifReader: Successfully read metadata for \(url.path). Orientation: \(orient)")
+                    let meta = parseExifToolOutput(output)
+                    log("ExifReader: Successfully read metadata for \(url.path). Orientation: \(meta.orientation ?? -1)")
                     return meta
                 }
             }
@@ -594,6 +420,90 @@ class ExifReader {
             log("ExifTool failed: \(error)")
             return nil
         }
+    }
+    
+    private func parseExifToolOutput(_ output: [String: Any]) -> ExifMetadata {
+        var meta = ExifMetadata()
+        meta.rawProps = output
+        
+        // Basic Fields
+        meta.cameraMake = output["Make"] as? String
+        meta.cameraModel = output["Model"] as? String
+        meta.lensModel = output["LensModel"] as? String
+        meta.software = output["Software"] as? String
+        
+        // Focal Length (Numeric due to #)
+        if let fl = output["FocalLength"] as? Double {
+            meta.focalLength = fl
+        }
+        
+        // Aperture (Numeric due to #)
+        if let fn = output["FNumber"] as? Double {
+            meta.aperture = fn
+        }
+        
+        // Shutter Speed (Numeric due to #, format for display)
+        if let et = output["ExposureTime"] as? Double {
+            meta.shutterSpeed = formatShutterSpeed(et)
+        }
+        
+        // ISO (Numeric due to #)
+        if let iso = output["ISO"] as? Int {
+            meta.iso = iso
+        }
+        
+        // Dimensions (Numeric due to #)
+        let w = (output["RawImageWidth"] as? Int) ?? (output["ExifImageWidth"] as? Int) ?? (output["ImageWidth"] as? Int)
+        let h = (output["RawImageHeight"] as? Int) ?? (output["ExifImageHeight"] as? Int) ?? (output["ImageHeight"] as? Int)
+        
+        // Orientation (Numeric due to #)
+        var orient = 1
+        if let o = output["Orientation"] as? Int {
+            orient = o
+        }
+        
+        // Swap dimensions if rotated
+        if [5, 6, 7, 8].contains(orient) {
+            meta.width = h
+            meta.height = w
+        } else {
+            meta.width = w
+            meta.height = h
+        }
+        meta.orientation = orient
+        
+        // Date
+        if let dateStr = output["DateTimeOriginal"] as? String {
+            meta.dateTimeOriginal = parseDate(dateStr)
+        }
+        
+        // Extended Fields (Strings)
+        meta.meteringMode = output["MeteringMode"] as? String
+        meta.flash = output["Flash"] as? String
+        meta.whiteBalance = output["WhiteBalance"] as? String
+        meta.exposureProgram = output["ExposureProgram"] as? String
+        meta.exposureCompensation = output["ExposureCompensation"] as? Double
+        
+        // Rating
+        meta.rating = output["Rating"] as? Int
+        
+        // Label
+        if let label = output["Label"] as? String {
+            meta.colorLabel = label
+        } else if let urgency = output["Urgency"] as? Int {
+             switch urgency {
+             case 1: meta.colorLabel = "Red"
+             case 2: meta.colorLabel = "Orange"
+             case 3: meta.colorLabel = "Yellow"
+             case 4: meta.colorLabel = "Green"
+             case 5: meta.colorLabel = "Blue"
+             case 6: meta.colorLabel = "Purple"
+             case 7: meta.colorLabel = "Gray"
+             default: break
+             }
+        }
+        
+        return meta
     }
     
     private func parseDate(_ dateString: String) -> Date? {

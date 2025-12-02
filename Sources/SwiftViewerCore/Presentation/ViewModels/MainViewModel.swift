@@ -1542,14 +1542,9 @@ public class MainViewModel: ObservableObject {
             meta.orientation = Int(item.orientation)
             meta.rating = Int(item.rating)  // Load rating from DB
 
-            // Swap dimensions if rotated 90/270 degrees
-            if [5, 6, 7, 8].contains(meta.orientation ?? 1) {
-                meta.width = Int(item.height)
-                meta.height = Int(item.width)
-            } else {
-                meta.width = Int(item.width)
-                meta.height = Int(item.height)
-            }
+            // Dimensions are already swapped by ExifReader/MediaRepository
+            meta.width = Int(item.width)
+            meta.height = Int(item.height)
 
             meta.rating = Int(item.rating)
             meta.colorLabel = item.colorLabel  // Fix: Read colorLabel
@@ -1855,12 +1850,8 @@ public class MainViewModel: ObservableObject {
                     for item in rawItems {
                         var data = rawMetadata[item.url] ?? ExifMetadata()
 
-                        // Swap dimensions if rotated 90/270 degrees
-                        if [5, 6, 7, 8].contains(data.orientation ?? 1) {
-                            let w = data.width
-                            data.width = data.height
-                            data.height = w
-                        }
+                        // Dimensions are already swapped by ExifReader
+                        // if [5, 6, 7, 8].contains(data.orientation ?? 1) { ... }
 
                         // Merge Rating
                         if let local = localRatingsMap[item.url] {
