@@ -2662,6 +2662,9 @@ public class MainViewModel: ObservableObject {
         updateColorLabel(for: [item], label: label)
     }
 
+    // moveUp/moveDown are already defined around line 2393
+    // Removing duplicate definitions here
+
 
     func selectNext() {
         guard let current = currentFile, let index = fileItems.firstIndex(of: current) else {
@@ -3663,7 +3666,10 @@ public class MainViewModel: ObservableObject {
         // Trigger Catalog Refresh if active
         await MainActor.run {
             if self.appMode == .catalog, let catalog = self.currentCatalog {
+                // Force reload of media items to reflect new paths
                 self.loadMediaItems(from: catalog)
+                // Also refresh the folder tree
+                self.fileSystemRefreshID = UUID()
             }
         }
     }

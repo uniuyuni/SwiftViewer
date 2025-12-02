@@ -20,7 +20,8 @@ final class SpecificationTests: XCTestCase {
         // A better approach for unit tests is to test the Services or logic that accepts the context.
         
         // However, MainViewModel is the main orchestrator. Let's instantiate it.
-        viewModel = MainViewModel()
+        // Initialize ViewModel with the test context
+        viewModel = MainViewModel(persistenceController: persistenceController)
         
         // Hack: If MainViewModel uses PersistenceController.shared, we might be affecting global state.
         // Ideally, MainViewModel should accept a PersistenceController in init.

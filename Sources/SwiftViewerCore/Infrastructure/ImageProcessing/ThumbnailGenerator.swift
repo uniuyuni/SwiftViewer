@@ -13,7 +13,7 @@ class ThumbnailGenerator {
     func generateThumbnail(for url: URL, size: CGSize, orientation: Int? = nil) async -> NSImage? {
         if Task.isCancelled { return nil }
         
-        let key = "\(url.path)_\(Int(size.width))x\(Int(size.height))_v4"
+        let key = "\(url.path)_\(Int(size.width))x\(Int(size.height))_v14"
         
         // Check cache (Fast, no await if ImageCacheService is fast)
         if let cached = ImageCacheService.shared.image(forKey: key) {
@@ -21,10 +21,11 @@ class ThumbnailGenerator {
         }
         
         let ext = url.pathExtension.lowercased()
-        let isRaw = FileConstants.allowedImageExtensions.contains(ext) && !["jpg", "jpeg", "png", "heic", "tiff", "gif", "webp"].contains(ext)
+        let isRaw = FileConstants.rawExtensions.contains(ext)
         
         // For RAW files, prioritize CGImageSource to use embedded preview with Manual Rotation
-        if isRaw {
+        // Skip RAF because ImageIO incorrectly rotates the already-upright embedded thumbnail
+        if isRaw && ext != "raf" {
             if Task.isCancelled { return nil }
             // Run synchronous downsample in detached task to avoid blocking calling thread
             let thumbWrapper = await Task.detached(priority: .userInitiated) {
@@ -63,11 +64,8 @@ class ThumbnailGenerator {
                         }
                         
                         var finalImage = largePreview
-                        if let orientation = orientation {
-                            if let rotated = self.rotate(image: finalImage, orientation: orientation) {
-                                finalImage = rotated
-                            }
-                        }
+                        // EmbeddedPreviewExtractor already handles rotation. Do not rotate again.
+                        // if let orientation = orientation { ... }
                         
                         ImageCacheService.shared.setImage(finalImage, forKey: key)
                         return finalImage
@@ -78,8 +76,14 @@ class ThumbnailGenerator {
                      print("DEBUG: Generated thumbnail size \(thumb.size) is acceptable for target \(size).")
                 }
                 
-                ImageCacheService.shared.setImage(thumb, forKey: key)
-                return thumb
+                // If fallback failed, check if original thumb is usable
+                if thumb.size.width > 0 && thumb.size.height > 0 {
+                    ImageCacheService.shared.setImage(thumb, forKey: key)
+                    return thumb
+                } else {
+                    print("DEBUG: Generated thumbnail is 0x0 and fallback failed for \(url.lastPathComponent)")
+                    return nil
+                }
             }
         }
         
@@ -88,30 +92,31 @@ class ThumbnailGenerator {
         
         // Primary: CGImageSource
         // Use applyTransform: true for RGB files (JPG, HEIC, etc) as system handles them correctly
-        if let downsampled = downsample(imageAt: url, to: size, applyTransform: true) {
+        // Skip RAF
+        if ext != "raf", let downsampled = downsample(imageAt: url, to: size, applyTransform: true) {
             ImageCacheService.shared.setImage(downsampled, forKey: key)
             return downsampled
         }
         
         // Fallback: NSImage
         if let image = NSImage(contentsOf: url) {
-             ImageCacheService.shared.setImage(image, forKey: key)
-             return image
+             if image.size.width > 0 && image.size.height > 0 {
+                 ImageCacheService.shared.setImage(image, forKey: key)
+                 return image
+             }
         }
         
         // Final Fallback: Embedded Thumbnail Extraction
         Logger.shared.log("DEBUG: ThumbnailGenerator falling back to EmbeddedPreviewExtractor for \(url.lastPathComponent)")
         let thumbWrapper = await Task.detached(priority: .utility) {
-            let img = EmbeddedPreviewExtractor.shared.extractThumbnail(from: url)
+            // Use extractPreview to get higher quality thumbnail (ThumbnailImage is often too small)
+            let img = EmbeddedPreviewExtractor.shared.extractPreview(from: url)
             return SendableImage(image: img)
         }.value
         
         if var thumb = thumbWrapper.image {
-            if let orientation = orientation {
-                if let rotated = rotate(image: thumb, orientation: orientation) {
-                    thumb = rotated
-                }
-            }
+            // EmbeddedPreviewExtractor already handles rotation. Do not rotate again.
+            // if let orientation = orientation { ... }
             ImageCacheService.shared.setImage(thumb, forKey: key)
             return thumb
         }
@@ -139,7 +144,7 @@ class ThumbnailGenerator {
         var metadata: ExifMetadata? = nil
         
         let ext = url.pathExtension.lowercased()
-        let isRaw = FileConstants.allowedImageExtensions.contains(ext) && !["jpg", "jpeg", "png", "heic", "tiff", "gif", "webp"].contains(ext)
+        let isRaw = FileConstants.rawExtensions.contains(ext)
         
         // Create Source
         let imageSourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
@@ -162,7 +167,8 @@ class ThumbnailGenerator {
         if image == nil {
             if isRaw {
                 // Try with applyTransform: true first to get correct orientation
-                if let img = downsample(imageAt: url, to: size, applyTransform: true) {
+                // Skip RAF
+                if ext != "raf", let img = downsample(imageAt: url, to: size, applyTransform: true) {
                     image = img
                     ImageCacheService.shared.setImage(img, forKey: key)
                 }
@@ -208,11 +214,8 @@ class ThumbnailGenerator {
                         // But wait, generateThumbnailAndMetadataSync doesn't take orientation arg.
                         // It extracts metadata.
                         // So we should use the extracted metadata orientation!
-                        if let meta = metadata, let orientation = meta.orientation {
-                             if let rotated = rotate(image: largePreview, orientation: orientation) {
-                                 image = rotated
-                             }
-                        }
+                        // EmbeddedPreviewExtractor already handles rotation. Do not rotate again.
+                        // if let meta = metadata, let orientation = meta.orientation { ... }
                         
                         ImageCacheService.shared.setImage(image!, forKey: key)
                     }

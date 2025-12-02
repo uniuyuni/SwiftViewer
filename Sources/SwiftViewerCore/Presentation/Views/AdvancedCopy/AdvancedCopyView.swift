@@ -146,8 +146,18 @@ public struct AdvancedCopyView: View {
                             }
                             .labelsHidden()
                             
-                            Toggle("Gray out existing files", isOn: $viewModel.grayOutExisting)
+                            Button("Unselect existing files") {
+                                viewModel.unselectExistingFiles()
+                            }
+                            .disabled(viewModel.selectedDestinationFolder == nil)
                         }
+                        
+                        // Hidden Select All Shortcut
+                        Button("Select All") {
+                            viewModel.selectAllFiles()
+                        }
+                        .keyboardShortcut("a", modifiers: .command)
+                        .hidden()
                         
                         Divider()
                         

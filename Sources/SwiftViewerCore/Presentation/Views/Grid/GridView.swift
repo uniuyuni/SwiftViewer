@@ -67,7 +67,8 @@ struct GridView: View {
                 }
             }
             .navigationTitle(title)
-            .onChange(of: geo.size.width) { _, width in
+            .onChange(of: geo.size.width) { newValue in
+                let width = newValue
                 let spacing: CGFloat = 10
                 let minSize = viewModel.thumbnailSize
                 let availableWidth = max(0, width - 32)
@@ -91,13 +92,13 @@ struct GridView: View {
         .toolbar {
             toolbarContent
         }
-        .onChange(of: viewModel.sortOption) { _, _ in
+        .onChange(of: viewModel.sortOption) { _ in
             viewModel.applyFilter()
         }
-        .onChange(of: viewModel.filterCriteria.searchText) { _, _ in
+        .onChange(of: viewModel.filterCriteria.searchText) { _ in
             viewModel.applyFilter()
         }
-        .onChange(of: viewModel.isSortAscending) { _, _ in
+        .onChange(of: viewModel.isSortAscending) { _ in
             viewModel.applyFilter()
         }
         .alert("Delete Items", isPresented: $viewModel.showDeleteConfirmation) {
@@ -141,7 +142,7 @@ struct GridView: View {
             }
         }
         .padding()
-        .onChange(of: viewModel.currentFile) { _, newFile in
+        .onChange(of: viewModel.currentFile) { newFile in
             if let file = newFile, viewModel.isAutoScrollEnabled {
                 // slight delay to ensure layout update
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {

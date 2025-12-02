@@ -33,48 +33,35 @@ class EmbeddedPreviewExtractor {
     
     private func extractUsingExifTool(url: URL, type: PreviewType) -> NSImage? {
         // Check if exiftool exists (simple check, maybe cache this)
-        // For now, assume it might be in /usr/local/bin or PATH
+        let exifToolPath = "/usr/local/bin/exiftool"
+        guard FileManager.default.fileExists(atPath: exifToolPath) else { return nil }
         
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/local/bin/exiftool") // Hardcoded for now based on check
+        process.executableURL = URL(fileURLWithPath: exifToolPath)
         
         var args: [String] = ["-b"]
         switch type {
         case .thumbnail:
             args.append("-ThumbnailImage")
+            args.append(url.path)
         case .preview:
-            // Try Composite:PreviewImage first, then JpgFromRaw
-            // Note: ExifTool only extracts one tag at a time with -b usually, or concatenates them.
-            // We should try one by one or use a specific priority.
-            // Let's try Composite:PreviewImage first as it's usually the best.
-            // If that fails, we might need another call.
-            // For simplicity, let's ask for Composite:PreviewImage.
-            // If we want to be robust, we can try multiple tags.
-            // But for now, let's use -PreviewImage which is often an alias or Composite.
-            args.append("-PreviewImage")
-            args.append("-JpgFromRaw") // Fallback if PreviewImage is missing? Exiftool might output both if both present?
-            // Actually, if we pass multiple tags with -b, they are concatenated. We don't want that.
-            // Let's just try PreviewImage first.
-             args = ["-b", "-PreviewImage", url.path]
+            // For RAF, use PreviewImage (usually full size or large preview)
+            if url.pathExtension.lowercased() == "raf" {
+                args.append("-PreviewImage")
+                args.append(url.path)
+            } else {
+                // Try PreviewImage first for others
+                args.append("-PreviewImage")
+                args.append(url.path)
+            }
         }
-        
-        if type == .thumbnail {
-             args.append(url.path)
-        }
-        
-        // Refined Logic for Preview:
-        // If type is preview, we really want the largest one.
-        // Let's try a prioritized list logic if we were doing this strictly.
-        // But for this implementation, let's stick to a simple call.
-        // If PreviewImage fails, we might miss JpgFromRaw.
-        // Let's try a combined approach: Ask for -JpgFromRaw if -PreviewImage fails?
-        // That requires two calls.
-        // Let's just use -PreviewImage for now as it's the standard composite tag.
         
         process.arguments = args
         
         let pipe = Pipe()
+        let errorPipe = Pipe()
         process.standardOutput = pipe
+        process.standardError = errorPipe
         
         do {
             try process.run()
@@ -82,15 +69,24 @@ class EmbeddedPreviewExtractor {
             process.waitUntilExit()
             
             if !data.isEmpty, let image = NSImage(data: data) {
-                return fixOrientation(of: image, from: url)
-            } else if type == .preview {
-                // Fallback for preview: Try JpgFromRaw
-                return extractUsingExifToolTag(url: url, tag: "-JpgFromRaw")
+                return fixOrientation(of: image, from: data, url: url)
             } else {
-                // ExifTool returned empty data or invalid image
+                // If PreviewImage failed, try JpgFromRaw for previews (or PreviewImage if we tried JpgFromRaw first)
+                if type == .preview {
+                    let ext = url.pathExtension.lowercased()
+                    let tag = (ext == "raf") ? "-JpgFromRaw" : "-JpgFromRaw"
+                    print("DEBUG: ExifTool primary tag failed for \(url.lastPathComponent), trying \(tag)")
+                    return extractUsingExifToolTag(url: url, tag: tag)
+                }
+                
+                // Log error if needed
+                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                if let errorStr = String(data: errorData, encoding: .utf8), !errorStr.isEmpty {
+                    print("DEBUG: ExifTool error for \(url.lastPathComponent): \(errorStr)")
+                }
             }
         } catch {
-            // ExifTool execution failed
+            print("DEBUG: ExifTool execution failed: \(error)")
             return nil
         }
         
@@ -111,7 +107,7 @@ class EmbeddedPreviewExtractor {
             process.waitUntilExit()
             
             if !data.isEmpty, let image = NSImage(data: data) {
-                return fixOrientation(of: image, from: url)
+                return fixOrientation(of: image, from: data, url: url)
             }
         } catch {
             return nil
@@ -119,14 +115,73 @@ class EmbeddedPreviewExtractor {
         return nil
     }
     
-    func fixOrientation(of image: NSImage, from url: URL) -> NSImage {
-        // Read orientation from the ORIGINAL file
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
-              let orientation = properties[kCGImagePropertyOrientation as String] as? Int else {
-            return image
-        }
+    func fixOrientation(of image: NSImage, from data: Data, url: URL) -> NSImage {
+        let orientation = getOrientation(from: data, url: url)
         return fixOrientation(of: image, orientation: orientation)
+    }
+    
+    private func getOrientation(from data: Data, url: URL) -> Int {
+        let ext = url.pathExtension.lowercased()
+        
+        // RAF Fix: Force Orient 1 for Portrait RAWs to match User preference
+        if ext == "raf" {
+            print("DEBUG: RAF detected. Forcing Orient 1 (Portrait).")
+            return 1
+        }
+        
+        // 1. Try Embedded Data Orientation
+        if let source = CGImageSourceCreateWithData(data as CFData, nil),
+           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
+           let orientation = properties[kCGImagePropertyOrientation as String] as? Int {
+            return orientation
+        }
+        
+        // 2. Exceptions (Ignore RAW Orientation)
+        if ext == "orf" {
+            // Olympus ORF embedded previews are often already rotated or don't match RAW tag
+            return 1
+        }
+        
+        // 3. Special Handling for Sony ARW
+        if ext == "arw" {
+            // Try Sony:CameraOrientation via ExifTool
+            if let sonyOrient = getExifToolTag(url: url, tag: "-Sony:CameraOrientation") {
+                return sonyOrient
+            }
+        }
+        
+        // 4. Fallback: RAW File Orientation
+        if let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
+           let orientation = properties[kCGImagePropertyOrientation as String] as? Int {
+            
+            return orientation
+        }
+        
+        return 1
+    }
+    
+    private func getExifToolTag(url: URL, tag: String) -> Int? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/local/bin/exiftool")
+        process.arguments = ["-b", "-n", tag, url.path] // -n for numeric
+        
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        
+        do {
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            
+            if let str = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               let val = Int(str) {
+                return val
+            }
+        } catch {
+            return nil
+        }
+        return nil
     }
     
     func fixOrientation(of image: NSImage, orientation: Int) -> NSImage {
@@ -144,8 +199,17 @@ class EmbeddedPreviewExtractor {
         switch orientation {
         case 1: degrees = 0
         case 3: degrees = 180
-        case 6: degrees = -90
-        case 8: degrees = 90
+        case 6: degrees = 90 // 90 CW (Needs -90 radians in CGContext? No, wait.)
+            // CGContext rotate(by: angle) -> positive is CCW.
+            // Orient 6 (Right Top) -> Needs 90 CW rotation to be Upright.
+            // 90 CW = -90 CCW.
+            // context.rotate(by: -radians).
+            // If degrees = 90, radians = 90. rotate(by: -90) -> 90 CW. Correct.
+        case 8: degrees = -90 // 90 CCW (Needs 90 radians in CGContext)
+            // Orient 8 (Left Bottom) -> Needs 90 CCW rotation to be Upright.
+            // 90 CCW = 90 CCW.
+            // context.rotate(by: -radians).
+            // If degrees = -90, radians = -90. rotate(by: -(-90)) = rotate(by: 90) -> 90 CCW. Correct.
         case 2: isMirrored = true
         case 4: degrees = 180; isMirrored = true
         case 5: degrees = -90; isMirrored = true
@@ -163,8 +227,17 @@ class EmbeddedPreviewExtractor {
         let radians = degrees * .pi / 180
         let absRadians = abs(radians)
         
-        let newWidth = originalWidth * abs(cos(absRadians)) + originalHeight * abs(sin(absRadians))
-        let newHeight = originalWidth * abs(sin(absRadians)) + originalHeight * abs(cos(absRadians))
+        let cosVal = abs(cos(absRadians))
+        let sinVal = abs(sin(absRadians))
+        
+        print("DEBUG: rotate(orient: \(orientation)) -> degrees: \(degrees), radians: \(radians)")
+        print("DEBUG: Original: \(originalWidth)x\(originalHeight)")
+        print("DEBUG: cos: \(cosVal), sin: \(sinVal)")
+        
+        let newWidth = originalWidth * cosVal + originalHeight * sinVal
+        let newHeight = originalWidth * sinVal + originalHeight * cosVal
+        
+        print("DEBUG: Calculated New Size: \(newWidth)x\(newHeight)")
         
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
@@ -176,6 +249,7 @@ class EmbeddedPreviewExtractor {
                                       bytesPerRow: 0,
                                       space: colorSpace,
                                       bitmapInfo: bitmapInfo) else {
+            print("DEBUG: rotate failed to create CGContext")
             return image
         }
         
@@ -185,28 +259,18 @@ class EmbeddedPreviewExtractor {
         if isMirrored {
             context.scaleBy(x: -1, y: 1)
         }
-        context.rotate(by: -radians) // CGContext rotation is counter-clockwise? Check direction.
-        // Standard EXIF orientation:
-        // 6 = 90 CW. In CG, positive rotation is CCW. So 90 CW = -90 CCW.
-        // My switch says: case 6: degrees = -90.
-        // So rotate(by: -(-90 * pi/180)) = rotate(by: +90 * pi/180) = 90 CCW.
-        // Wait.
-        // EXIF 6 (Right Top) -> Requires 90 CW rotation to be Up.
-        // If I rotate 90 CW, that is -90 degrees in standard math (if Y is up).
-        // But in CGContext (Y up), positive angle is CCW.
-        // So 90 CW = -90 CCW.
-        // My switch has case 6: degrees = -90.
-        // So passing -90 to rotate(by:) (which expects radians) -> rotate(by: -90 * pi/180).
-        // This seems correct for 90 CW.
+        context.rotate(by: -radians)
         
         context.translateBy(x: -originalWidth / 2, y: -originalHeight / 2)
         
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: originalWidth, height: originalHeight))
         
         guard let newCGImage = context.makeImage() else {
+            print("DEBUG: rotate failed to makeImage")
             return image
         }
         
+        print("DEBUG: rotate success. New Size: \(newWidth)x\(newHeight)")
         return NSImage(cgImage: newCGImage, size: NSSize(width: newWidth, height: newHeight))
     }
     
@@ -223,12 +287,6 @@ class EmbeddedPreviewExtractor {
         
         let count = data.count
         // Limit scan to first 10MB or so? Some previews are at the end (Sony ARW).
-        
-        // Limit scan to first 10MB or so? Some previews are at the end (Sony ARW).
-        // Sony ARW: Preview is often near the end or in the middle.
-        // Let's scan the whole file but be careful.
-        // Scanning 50MB+ in Swift loop might be slow.
-        // Optimization: Search for FF D8 using range(of:)
         
         var searchRange = 0..<count
         
@@ -254,8 +312,6 @@ class EmbeddedPreviewExtractor {
                 
                 // Continue search after this block
                 searchRange = start + 1..<count // Overlap check? or end..<count?
-                // Some thumbnails are inside previews?
-                // Let's just move forward.
             } else {
                 // No end found nearby, move on
                 searchRange = start + 1..<count
@@ -263,7 +319,7 @@ class EmbeddedPreviewExtractor {
         }
         
         if let jpegData = largestData, let image = NSImage(data: jpegData) {
-            return fixOrientation(of: image, from: url)
+            return fixOrientation(of: image, from: jpegData, url: url)
         }
         
         return nil

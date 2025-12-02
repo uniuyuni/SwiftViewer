@@ -248,7 +248,24 @@ struct ZoomableImageView: View {
             .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
             .task(id: url) {
-                // 1. Try standard NSImage load first (fastest for JPG/PNG)
+                // 1. Check if RAW. If so, prioritize Embedded Preview for speed.
+                let ext = url.pathExtension.lowercased()
+                let isRaw = FileConstants.rawExtensions.contains(ext)
+                
+                if isRaw {
+                    // Use ThumbnailGenerator (which uses QuickLook) to ensure correct rotation.
+                    // Request a large size (screen size) for detail view.
+                    if let screen = NSScreen.main {
+                        let size = screen.frame.size
+                        if let thumb = await ThumbnailGenerator.shared.generateThumbnail(for: url, size: size) {
+                            self.image = thumb
+                            self.isOffline = false
+                            return
+                        }
+                    }
+                }
+                
+                // 2. Try standard NSImage load (fastest for JPG/PNG)
                 if let loaded = NSImage(contentsOf: url) {
                     self.image = loaded
                     self.isOffline = false
