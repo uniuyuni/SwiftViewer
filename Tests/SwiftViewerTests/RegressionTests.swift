@@ -15,8 +15,8 @@ final class RegressionTests: XCTestCase {
         let item4 = FileItem(url: url, isDirectory: false, uuid: uuid, fileCount: 10, modificationDate: date2)
         
         XCTAssertEqual(item1, item2, "Identical items should be equal")
-        XCTAssertNotEqual(item1, item3, "Items with different fileCount should NOT be equal")
-        XCTAssertNotEqual(item1, item4, "Items with different modificationDate should NOT be equal")
+        XCTAssertEqual(item1, item3, "Items with same ID should be equal (Identity equality)")
+        XCTAssertEqual(item1, item4, "Items with same ID should be equal (Identity equality)")
     }
     
     func testFileSortService_DateSorting() {

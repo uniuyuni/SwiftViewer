@@ -6,11 +6,12 @@ struct SimpleFolderTreeView: View {
     @Binding var expandedFolders: Set<URL> // Added binding
     var virtualFolders: [FileItem] = []
     var isLoading: Bool = false // Added loading state
+    var viewModel: AdvancedCopyViewModel? = nil
     
     var body: some View {
         List {
             ForEach(rootFolders) { folder in
-                SimpleFolderNodeView(folder: folder, selectedFolder: $selectedFolder, expandedFolders: $expandedFolders, virtualFolders: virtualFolders, isLoading: isLoading)
+                SimpleFolderNodeView(folder: folder, selectedFolder: $selectedFolder, expandedFolders: $expandedFolders, virtualFolders: virtualFolders, isLoading: isLoading, viewModel: viewModel)
             }
         }
     }
@@ -22,8 +23,11 @@ struct SimpleFolderNodeView: View {
     @Binding var expandedFolders: Set<URL>
     var virtualFolders: [FileItem]
     var isLoading: Bool
+    var viewModel: AdvancedCopyViewModel? = nil
     
     @State private var subfolders: [FileItem]? = nil
+    @State private var showNewFolderAlert = false
+    @State private var newFolderName = ""
     
     var isExpanded: Binding<Bool> {
         Binding(
@@ -49,7 +53,7 @@ struct SimpleFolderNodeView: View {
                     let combined = mergeSubfolders(real: subfolders, virtual: virtualFolders, parent: folder.url)
                     
                     ForEach(combined) { subfolder in
-                        SimpleFolderNodeView(folder: subfolder, selectedFolder: $selectedFolder, expandedFolders: $expandedFolders, virtualFolders: virtualFolders, isLoading: isLoading)
+                        SimpleFolderNodeView(folder: subfolder, selectedFolder: $selectedFolder, expandedFolders: $expandedFolders, virtualFolders: virtualFolders, isLoading: isLoading, viewModel: viewModel)
                     }
                 } else {
                     ProgressView()
@@ -104,6 +108,27 @@ struct SimpleFolderNodeView: View {
             }
         }
         .disabled(!folder.isAvailable)
+        .contextMenu {
+            // Only show menu for real folders
+            if folder.isAvailable && viewModel != nil {
+                Button("New Folder...") {
+                    newFolderName = ""
+                    showNewFolderAlert = true
+                }
+            }
+        }
+        .alert("New Folder", isPresented: $showNewFolderAlert) {
+            TextField("Folder Name", text: $newFolderName)
+            Button("Create") {
+                if !newFolderName.isEmpty, let viewModel = viewModel {
+                    viewModel.createFolder(at: folder.url, name: newFolderName)
+                    // Expand to show new folder
+                    isExpanded.wrappedValue = true
+                    loadSubfolders()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
     }
     
     private func mergeSubfolders(real: [FileItem], virtual: [FileItem], parent: URL) -> [FileItem] {

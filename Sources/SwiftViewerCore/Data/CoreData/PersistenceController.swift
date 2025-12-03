@@ -142,7 +142,13 @@ public struct PersistenceController {
         cat_color.attributeType = .stringAttributeType
         cat_color.isOptional = true
         
-        catalog.properties = [cat_id, cat_name, cat_created, cat_modified, cat_color]
+        let cat_importing = NSAttributeDescription()
+        cat_importing.name = "isImporting"
+        cat_importing.attributeType = .booleanAttributeType
+        cat_importing.defaultValue = false
+        cat_importing.isOptional = false
+        
+        catalog.properties = [cat_id, cat_name, cat_created, cat_modified, cat_color, cat_importing]
         
         // Properties - MediaItem
         let mi_id = NSAttributeDescription()
@@ -227,7 +233,19 @@ public struct PersistenceController {
         mi_exists.defaultValue = true
         mi_exists.isOptional = false
         
-        mediaItem.properties = [mi_id, mi_path, mi_name, mi_size, mi_type, mi_capture, mi_import, mi_mod, mi_rating, mi_flag, mi_color, mi_orient, mi_w, mi_h, mi_exists]
+        let mi_fav = NSAttributeDescription()
+        mi_fav.name = "isFavorite"
+        mi_fav.attributeType = .booleanAttributeType
+        mi_fav.defaultValue = false
+        mi_fav.isOptional = false
+        
+        let mi_flagStatus = NSAttributeDescription()
+        mi_flagStatus.name = "flagStatus"
+        mi_flagStatus.attributeType = .integer16AttributeType
+        mi_flagStatus.defaultValue = 0
+        mi_flagStatus.isOptional = false
+        
+        mediaItem.properties = [mi_id, mi_path, mi_name, mi_size, mi_type, mi_capture, mi_import, mi_mod, mi_rating, mi_flag, mi_color, mi_orient, mi_w, mi_h, mi_exists, mi_fav, mi_flagStatus]
         
         // Properties - ExifData
         let ed_id = NSAttributeDescription()
@@ -291,6 +309,60 @@ public struct PersistenceController {
         ed_lat.isOptional = true
         exifData.properties.append(ed_lat)
         
+        let ed_brightnessValue = NSAttributeDescription()
+        ed_brightnessValue.name = "brightnessValue"
+        ed_brightnessValue.attributeType = .doubleAttributeType
+        ed_brightnessValue.isOptional = true
+        exifData.properties.append(ed_brightnessValue)
+
+        let ed_exposureBias = NSAttributeDescription()
+        ed_exposureBias.name = "exposureBias"
+        ed_exposureBias.attributeType = .doubleAttributeType
+        ed_exposureBias.isOptional = true
+        exifData.properties.append(ed_exposureBias)
+
+        let ed_serialNumber = NSAttributeDescription()
+        ed_serialNumber.name = "serialNumber"
+        ed_serialNumber.attributeType = .stringAttributeType
+        ed_serialNumber.isOptional = true
+        exifData.properties.append(ed_serialNumber)
+
+        let ed_title = NSAttributeDescription()
+        ed_title.name = "title"
+        ed_title.attributeType = .stringAttributeType
+        ed_title.isOptional = true
+        exifData.properties.append(ed_title)
+
+        let ed_caption = NSAttributeDescription()
+        ed_caption.name = "caption"
+        ed_caption.attributeType = .stringAttributeType
+        ed_caption.isOptional = true
+        exifData.properties.append(ed_caption)
+
+        let ed_latitude = NSAttributeDescription()
+        ed_latitude.name = "latitude"
+        ed_latitude.attributeType = .doubleAttributeType
+        ed_latitude.isOptional = true
+        exifData.properties.append(ed_latitude)
+
+        let ed_longitude = NSAttributeDescription()
+        ed_longitude.name = "longitude"
+        ed_longitude.attributeType = .doubleAttributeType
+        ed_longitude.isOptional = true
+        exifData.properties.append(ed_longitude)
+
+        let ed_altitude = NSAttributeDescription()
+        ed_altitude.name = "altitude"
+        ed_altitude.attributeType = .doubleAttributeType
+        ed_altitude.isOptional = true
+        exifData.properties.append(ed_altitude)
+
+        let ed_imageDirection = NSAttributeDescription()
+        ed_imageDirection.name = "imageDirection"
+        ed_imageDirection.attributeType = .doubleAttributeType
+        ed_imageDirection.isOptional = true
+        exifData.properties.append(ed_imageDirection)
+        
         let ed_lon = NSAttributeDescription()
         ed_lon.name = "gpsLongitude"
         ed_lon.attributeType = .doubleAttributeType
@@ -326,6 +398,43 @@ public struct PersistenceController {
         ed_rating.attributeType = .integer16AttributeType
         ed_rating.isOptional = true
         exifData.properties.append(ed_rating)
+        
+        // NEW PROPERTIES
+        let ed_software = NSAttributeDescription()
+        ed_software.name = "software"
+        ed_software.attributeType = .stringAttributeType
+        ed_software.isOptional = true
+        exifData.properties.append(ed_software)
+        
+        let ed_metering = NSAttributeDescription()
+        ed_metering.name = "meteringMode"
+        ed_metering.attributeType = .stringAttributeType
+        ed_metering.isOptional = true
+        exifData.properties.append(ed_metering)
+        
+        let ed_flash = NSAttributeDescription()
+        ed_flash.name = "flash"
+        ed_flash.attributeType = .stringAttributeType
+        ed_flash.isOptional = true
+        exifData.properties.append(ed_flash)
+        
+        let ed_wb = NSAttributeDescription()
+        ed_wb.name = "whiteBalance"
+        ed_wb.attributeType = .stringAttributeType
+        ed_wb.isOptional = true
+        exifData.properties.append(ed_wb)
+        
+        let ed_prog = NSAttributeDescription()
+        ed_prog.name = "exposureProgram"
+        ed_prog.attributeType = .stringAttributeType
+        ed_prog.isOptional = true
+        exifData.properties.append(ed_prog)
+        
+        let ed_expComp = NSAttributeDescription()
+        ed_expComp.name = "exposureCompensation"
+        ed_expComp.attributeType = .doubleAttributeType
+        ed_expComp.isOptional = true
+        exifData.properties.append(ed_expComp)
         
         // Properties - Collection
         let col_id = NSAttributeDescription()

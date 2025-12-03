@@ -115,45 +115,64 @@ public class ThumbnailGenerationService: ObservableObject {
                 }
                 
                 // Process in batches
-                let batchSize = 10
+                let batchSize = 10 // Restore batch size to 10 for better throughput
                 let batch = Array(self.queue.prefix(batchSize))
                 
-                await context.perform {
+                // 1. Fetch Data (Sync on Context)
+                struct ItemData {
+                    let objectID: NSManagedObjectID
+                    let url: URL
+                    let uuid: UUID
+                }
+                
+                let itemsToProcess: [ItemData] = await context.perform {
+                    var result: [ItemData] = []
                     for objectID in batch {
                         if let item = try? context.existingObject(with: objectID) as? MediaItem,
                            let path = item.originalPath {
                             let url = URL(fileURLWithPath: path)
                             let uuid = item.id ?? UUID()
-                            
-                            // Generate Thumbnail and Metadata
-                            let size = CGSize(width: 600, height: 600)
-                            let (thumb, metadata) = ThumbnailGenerator.shared.generateThumbnailAndMetadataSync(for: url, size: size)
-                            
-                            if let thumb = thumb {
-                                ThumbnailCacheService.shared.saveThumbnail(image: thumb, for: uuid, type: .thumbnail)
-                            }
-                            
-                            // Generate Preview (Large)
-                            // For RAWs, this might be slow if we decode full image.
-                            // But ThumbnailGenerator handles RAWs efficiently via downsampling or embedded preview.
-                            // We use a larger size, e.g., 1024x1024 (User requested max long edge 1024)
-                            // Use user setting for preview size
-                            let previewSizeSetting = UserDefaults.standard.integer(forKey: "previewImageSize")
-                            let targetSize = previewSizeSetting > 0 ? CGFloat(previewSizeSetting) : 1024.0
-                            let previewSize = CGSize(width: targetSize, height: targetSize)
-                            
-                            if let preview = ThumbnailGenerator.shared.generateThumbnailSync(for: url, size: previewSize) {
-                                ThumbnailCacheService.shared.saveThumbnail(image: preview, for: uuid, type: .preview)
-                            }
-                            
-                            if let meta = metadata {
+                            result.append(ItemData(objectID: objectID, url: url, uuid: uuid))
+                        }
+                    }
+                    return result
+                }
+                
+                // 2. Generate Thumbnails (Async, Concurrent, No Context Lock)
+                for itemData in itemsToProcess {
+                    if Task.isCancelled { break }
+                    
+                    let url = itemData.url
+                    let uuid = itemData.uuid
+                    
+                    // Generate Thumbnail and Metadata
+                    let size = CGSize(width: 600, height: 600)
+                    let (thumb, metadata) = await ThumbnailGenerator.shared.generateThumbnailAndMetadataAsync(for: url, size: size)
+                    
+                    if let thumb = thumb {
+                        ThumbnailCacheService.shared.saveThumbnail(image: thumb, for: uuid, type: .thumbnail)
+                    }
+                    
+                    // Generate Preview (Large)
+                    let previewSizeSetting = UserDefaults.standard.integer(forKey: "previewImageSize")
+                    let targetSize = previewSizeSetting > 0 ? CGFloat(previewSizeSetting) : 1024.0
+                    let previewSize = CGSize(width: targetSize, height: targetSize)
+                    
+                    if let preview = await ThumbnailGenerator.shared.generateThumbnailAsync(for: url, size: previewSize) {
+                        ThumbnailCacheService.shared.saveThumbnail(image: preview, for: uuid, type: .preview)
+                    }
+                    
+                    // 3. Save Metadata (Sync on Context)
+                    if let meta = metadata {
+                        await context.perform {
+                            if let item = try? context.existingObject(with: itemData.objectID) as? MediaItem {
                                 // Update MediaItem for sorting
                                 item.captureDate = meta.dateTimeOriginal
                                 item.width = Int32(meta.width ?? 0)
                                 item.height = Int32(meta.height ?? 0)
                                 item.orientation = Int16(meta.orientation ?? 1)
                                 
-                                // Create/Update ExifData entity if needed (simplified)
+                                // Create/Update ExifData entity if needed
                                 if item.exifData == nil {
                                     let exif = ExifData(context: context)
                                     exif.id = UUID()
@@ -170,11 +189,10 @@ public class ThumbnailGenerationService: ObservableObject {
                                     exif.shutterSpeed = meta.shutterSpeed
                                     exif.iso = Int32(meta.iso ?? 0)
                                 }
+                                try? context.save()
                             }
                         }
                     }
-                    // Save changes to DB
-                    try? context.save()
                 }
                 
                 // Yield to prevent blocking

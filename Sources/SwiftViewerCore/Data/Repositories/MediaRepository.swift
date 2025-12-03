@@ -132,8 +132,13 @@ public class MediaRepository: MediaRepositoryProtocol {
         }
         
         // 3. Write to DB (Core Data)
-        try await container.performBackgroundTask { context in
-            guard let catalog = context.object(with: catalogID) as? Catalog else { return }
+        // Use newBackgroundContext and await perform to ensure we wait for completion
+        let bgContext = container.newBackgroundContext()
+        bgContext.automaticallyMergesChangesFromParent = true
+        bgContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        
+        try await bgContext.perform {
+            guard let catalog = bgContext.object(with: catalogID) as? Catalog else { return }
             
             // Fetch existing paths to prevent duplicates
             let existingPathsRequest: NSFetchRequest<NSFetchRequestResult> = MediaItem.fetchRequest()
@@ -141,7 +146,7 @@ public class MediaRepository: MediaRepositoryProtocol {
             existingPathsRequest.resultType = .dictionaryResultType
             existingPathsRequest.propertiesToFetch = ["originalPath"]
             
-            let existingResults = try? context.fetch(existingPathsRequest) as? [[String: String]]
+            let existingResults = try? bgContext.fetch(existingPathsRequest) as? [[String: String]]
             let existingPathSet = Set(existingResults?.compactMap { $0["originalPath"] } ?? [])
             
             var savedCount = 0
@@ -153,7 +158,7 @@ public class MediaRepository: MediaRepositoryProtocol {
                     continue // Skip existing
                 }
                 
-                let item = MediaItem(context: context)
+                let item = MediaItem(context: bgContext)
                 item.id = UUID()
                 item.originalPath = url.path
                 item.fileName = url.lastPathComponent
@@ -182,7 +187,13 @@ public class MediaRepository: MediaRepositoryProtocol {
                     
                     // Use pre-loaded EXIF
                     if let metadata = exifDataMap[url] {
-                        let exif = ExifData(context: context)
+                        // Map Item Level Metadata
+                        item.rating = Int16(metadata.rating ?? 0)
+                        item.colorLabel = metadata.colorLabel
+                        item.isFavorite = metadata.isFavorite ?? false
+                        item.flagStatus = Int16(metadata.flagStatus ?? 0)
+                        
+                        let exif = ExifData(context: bgContext)
                         exif.id = UUID()
                         exif.cameraMake = metadata.cameraMake
                         exif.cameraModel = metadata.cameraModel
@@ -192,6 +203,25 @@ public class MediaRepository: MediaRepositoryProtocol {
                         exif.shutterSpeed = metadata.shutterSpeed
                         exif.iso = Int32(metadata.iso ?? 0)
                         exif.dateTimeOriginal = metadata.dateTimeOriginal
+                        
+                        // Extended Fields
+                        exif.software = metadata.software
+                        exif.meteringMode = metadata.meteringMode
+                        exif.flash = metadata.flash
+                        exif.whiteBalance = metadata.whiteBalance
+                        exif.exposureProgram = metadata.exposureProgram
+                        exif.exposureCompensation = metadata.exposureCompensation ?? 0.0
+                        
+                        // New Fields
+                        exif.brightnessValue = metadata.brightnessValue ?? 0.0
+                        exif.exposureBias = metadata.exposureBias ?? 0.0
+                        exif.serialNumber = metadata.serialNumber
+                        exif.title = metadata.title
+                        exif.caption = metadata.caption
+                        exif.latitude = metadata.latitude ?? 0.0
+                        exif.longitude = metadata.longitude ?? 0.0
+                        exif.altitude = metadata.altitude ?? 0.0
+                        exif.imageDirection = metadata.imageDirection ?? 0.0
                         
                         if let raw = metadata.rawProps {
                             exif.rawProps = try? JSONSerialization.data(withJSONObject: raw, options: [])
@@ -213,11 +243,16 @@ public class MediaRepository: MediaRepositoryProtocol {
                 
                 savedCount += 1
                 if savedCount % 100 == 0 {
-                    try? context.save()
+                    try? bgContext.save()
                 }
             }
             
-            try context.save()
+            if bgContext.hasChanges {
+                try bgContext.save()
+                print("DEBUG: Import saved \(savedCount) items to Core Data.")
+            } else {
+                print("DEBUG: No changes to save in import.")
+            }
             
             // Enqueue thumbnails
             let ids = importedItems.map { $0.objectID }
@@ -234,6 +269,7 @@ public class MediaRepository: MediaRepositoryProtocol {
     public func fetchMediaItems(in catalog: Catalog) throws -> [MediaItem] {
         let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
         request.predicate = NSPredicate(format: "catalog == %@", catalog)
+        request.relationshipKeyPathsForPrefetching = ["exifData"] // Prefetch ExifData to avoid N+1 faults
         request.sortDescriptors = [NSSortDescriptor(keyPath: \MediaItem.importDate, ascending: false)]
         return try context.fetch(request)
     }
@@ -277,5 +313,27 @@ public class MediaRepository: MediaRepositoryProtocol {
             }
         }
         return filesToImport
+    }
+    
+    // MARK: - Favorite and Flag Status
+    
+    public func updateFavorite(for items: [MediaItem], isFavorite: Bool) {
+        context.perform {
+            for item in items {
+                item.isFavorite = isFavorite
+            }
+            try? self.context.save()
+        }
+    }
+    
+    public func updateFlagStatus(for items: [MediaItem], status: Int16) {
+        context.perform {
+            for item in items {
+                item.flagStatus = status
+                // Also update legacy isFlagged for compatibility
+                item.isFlagged = (status != 0)
+            }
+            try? self.context.save()
+        }
     }
 }

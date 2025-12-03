@@ -2,8 +2,7 @@ import SwiftUI
 
 public struct MainWindow: View {
     @StateObject private var viewModel = MainViewModel()
-    
-    @AppStorage("gridWidth") private var gridWidth: Double = 400 // Default grid width
+    @State private var gridWidth: CGFloat = 600 // Default grid width
     
     public init() {}
     
@@ -61,9 +60,56 @@ public struct MainWindow: View {
             }
     }
 
+    @ViewBuilder
     private var mainContent: some View {
         ZStack {
-            splitView
+            NavigationSplitView(columnVisibility: $viewModel.columnVisibility) {
+                SidebarView(viewModel: viewModel)
+                    .navigationSplitViewColumnWidth(min: 150, ideal: 200, max: 400)
+            } detail: {
+                detailContent
+            }
+            .frame(minWidth: 900, minHeight: 600) // Reduced minWidth
+            .onChange(of: viewModel.currentFolder) { _, newFolder in
+                if let folder = newFolder {
+                    viewModel.openFolder(folder)
+                }
+            }
+            .onChange(of: viewModel.currentCatalog) { _, newCatalog in
+                if let catalog = newCatalog {
+                    viewModel.openCatalog(catalog)
+                }
+            }
+            .background {
+                hiddenControls
+            }
+            .toolbar {
+                ToolbarItemGroup(placement: .navigation) {
+                    Button(action: { viewModel.toggleInspector() }) {
+                        Label("Inspector", systemImage: "info.circle")
+                    }
+                    
+                    Button(action: { viewModel.isPreviewVisible.toggle() }) {
+                        Label("Preview", systemImage: "eye")
+                    }
+                }
+                
+                ToolbarItemGroup {
+                    Slider(value: $viewModel.thumbnailSize, in: 50...300)
+                        .frame(width: 100)
+                }
+            }
+            .onChange(of: viewModel.filterCriteria.minRating) { _, _ in viewModel.applyFilter() }
+            .onChange(of: viewModel.filterCriteria.colorLabel) { _, _ in viewModel.applyFilter() }
+            .focusedSceneValue(\.toggleInspector) {
+                withAnimation {
+                    viewModel.toggleInspector()
+                }
+            }
+            .focusedSceneValue(\.updateCatalog) {
+                viewModel.triggerCatalogUpdateCheck()
+            }
+            .modifier(MainWindowAlerts(viewModel: viewModel))
             
             if viewModel.isBlockingOperation {
                 BlockingOperationView(
@@ -75,75 +121,35 @@ public struct MainWindow: View {
         }
     }
     
-    private var splitView: some View {
-        NavigationSplitView(columnVisibility: $viewModel.columnVisibility) {
-            SidebarView(viewModel: viewModel)
-        } detail: {
-            detailContent
-        }
-        .frame(minWidth: 900, minHeight: 600) // Reduced minWidth
-        .onChange(of: viewModel.currentFolder) { _, newFolder in
-            if let folder = newFolder {
-                viewModel.openFolder(folder)
-            }
-        }
-        .onChange(of: viewModel.currentCatalog) { _, newCatalog in
-            if let catalog = newCatalog {
-                viewModel.openCatalog(catalog)
-            }
-        }
-        .background {
-            hiddenControls
-        }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Slider(value: $viewModel.thumbnailSize, in: 50...300)
-                    .frame(width: 100)
-            }
-        }
-        .onChange(of: viewModel.filterCriteria.minRating) { _, _ in viewModel.applyFilter() }
-        .onChange(of: viewModel.filterCriteria.colorLabel) { _, _ in viewModel.applyFilter() }
-        .focusedSceneValue(\.toggleInspector) {
-            withAnimation {
-                viewModel.toggleInspector()
-            }
-        }
-        .focusedSceneValue(\.updateCatalog) {
-            viewModel.triggerCatalogUpdateCheck()
-        }
-        .modifier(MainWindowAlerts(viewModel: viewModel))
-    }
-    
     @ViewBuilder
     private var detailContent: some View {
         HStack(spacing: 0) {
             GridView(viewModel: viewModel)
-                .frame(minWidth: 100)
-                .frame(maxWidth: viewModel.isPreviewVisible ? gridWidth : .infinity)
+                .frame(minWidth: 400)
                 .frame(width: viewModel.isPreviewVisible ? gridWidth : nil)
+                .frame(maxWidth: viewModel.isPreviewVisible ? gridWidth : .infinity)
                 .layoutPriority(viewModel.isPreviewVisible ? 0 : 1)
             
             if viewModel.isPreviewVisible {
-                // Splitter for Preview
-                DraggableSplitter(width: Binding(
-                    get: { CGFloat(gridWidth) },
-                    set: { gridWidth = Double($0) }
-                ), isLeft: true)
+                DraggableSplitter(
+                    width: $gridWidth,
+                    isLeft: true,
+                    minWidth: 400,
+                    maxAllowedWidth: 800 // Fixed large value to prevent jitter from dynamic calculation
+                )
                 
                 DetailView(viewModel: viewModel)
-                    .frame(maxWidth: .infinity)
+                    .frame(minWidth: 100)
                     .layoutPriority(1)
             }
             
             if viewModel.isInspectorVisible {
-                // Divider or Splitter for Inspector?
-                // For now, just a Divider-like visual or simple border
                 Rectangle()
                     .fill(Color(nsColor: .separatorColor))
                     .frame(width: 1)
                 
                 InspectorView(viewModel: viewModel)
-                    .frame(width: 280) // Fixed width for Inspector
+                    .frame(width: 280)
                     .transition(.move(edge: .trailing))
             }
         }
@@ -196,6 +202,51 @@ public struct MainWindow: View {
         Button("Toggle Layout") { viewModel.togglePreviewLayout() }
             .keyboardShortcut(.tab, modifiers: .shift)
             .hidden()
+        
+        // Favorite and Flag shortcuts (Catalog only)
+        Button("Toggle Favorite") {
+            if viewModel.appMode == .catalog {
+                let items = viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)
+                if !items.isEmpty {
+                    viewModel.toggleFavorite(for: items)
+                }
+            }
+        }
+        .keyboardShortcut("l", modifiers: [])
+        .hidden()
+        
+        Button("Set Pick Flag") {
+            if viewModel.appMode == .catalog {
+                let items = viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)
+                if !items.isEmpty {
+                    viewModel.setFlagStatus(for: items, status: 1)
+                }
+            }
+        }
+        .keyboardShortcut("a", modifiers: [])
+        .hidden()
+        
+        Button("Set Reject Flag") {
+            if viewModel.appMode == .catalog {
+                let items = viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)
+                if !items.isEmpty {
+                    viewModel.setFlagStatus(for: items, status: -1)
+                }
+            }
+        }
+        .keyboardShortcut("x", modifiers: [])
+        .hidden()
+        
+        Button("Unflag") {
+            if viewModel.appMode == .catalog {
+                let items = viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)
+                if !items.isEmpty {
+                    viewModel.setFlagStatus(for: items, status: 0)
+                }
+            }
+        }
+        .keyboardShortcut("u", modifiers: [])
+        .hidden()
     }
 }
 
@@ -266,6 +317,10 @@ struct MainWindowAlerts: ViewModifier {
 struct DraggableSplitter: View {
     @Binding var width: CGFloat
     var isLeft: Bool = false // If true, resizing affects left pane width
+    var minWidth: CGFloat = 100
+    var maxAllowedWidth: CGFloat = 2000
+    
+    @State private var initialWidth: CGFloat?
     
     var body: some View {
         Rectangle()
@@ -287,19 +342,28 @@ struct DraggableSplitter: View {
             .gesture(
                 DragGesture()
                     .onChanged { value in
+                        if initialWidth == nil {
+                            initialWidth = width
+                        }
+                        
+                        guard let startWidth = initialWidth else { return }
+                        
                         if isLeft {
-                            let newWidth = width + value.translation.width
+                            let newWidth = startWidth + value.translation.width
                             // Clamp
-                             if newWidth >= 400 && newWidth <= 2000 {
+                             if newWidth >= minWidth && newWidth <= maxAllowedWidth {
                                 width = newWidth
                             }
                         } else {
-                            let newWidth = width - value.translation.width
+                            let newWidth = startWidth - value.translation.width
                             // Clamp
-                             if newWidth >= 400 && newWidth <= 2000 {
+                             if newWidth >= minWidth && newWidth <= maxAllowedWidth {
                                 width = newWidth
                             }
                         }
+                    }
+                    .onEnded { _ in
+                        initialWidth = nil
                     }
             )
     }

@@ -16,6 +16,8 @@ public struct ExifMetadata: @unchecked Sendable {
     public var orientation: Int?
     public var rating: Int?
     public var colorLabel: String?
+    public var isFavorite: Bool?
+    public var flagStatus: Int?
     // Extended fields
     public var meteringMode: String?
     public var flash: String?
@@ -23,6 +25,15 @@ public struct ExifMetadata: @unchecked Sendable {
     public var exposureProgram: String?
     public var exposureCompensation: Double?
     public var software: String?
+    public var brightnessValue: Double?
+    public var exposureBias: Double?
+    public var serialNumber: String?
+    public var title: String?
+    public var caption: String?
+    public var latitude: Double?
+    public var longitude: Double?
+    public var altitude: Double?
+    public var imageDirection: Double?
     public var rawProps: [String: Any]? // Dictionary for internal use, will be serialized
 }
 
@@ -232,18 +243,14 @@ class ExifReader {
     }
 
     private func _readExif(from url: URL) -> ExifMetadata? {
-        // 1. Try ExifTool ONLY for RAW files (Performance optimization)
-        let ext = url.pathExtension.lowercased()
-        let isRaw = FileConstants.allowedImageExtensions.contains(ext) && !["jpg", "jpeg", "png", "heic", "tiff", "gif", "webp"].contains(ext)
-        
-        if isRaw {
-            // Force ExifTool for ALL RAW files to ensure correct orientation/dimensions
-            // CGImageSource often fails to read the correct Orientation or Dimensions for RAWs.
-            if let metadata = readExifUsingExifTool(from: url) {
-                return metadata
-            }
-            print("ExifReader: ExifTool failed for RAW \(url.lastPathComponent). Falling back to CGImageSource.")
+        // 1. Try ExifTool for ALL files (Robustness over speed)
+        // This ensures we get all extended metadata (Software, Metering, etc.) and XMP ratings
+        if let metadata = readExifUsingExifTool(from: url) {
+            return metadata
         }
+        
+        // 2. Fallback to CGImageSource if ExifTool fails or is missing
+        print("ExifReader: ExifTool failed or missing for \(url.lastPathComponent). Falling back to CGImageSource.")
         
         // 2. Fallback to CGImageSource (Standard)
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
@@ -260,11 +267,22 @@ class ExifReader {
     private let exifTags = [
         "-Make", "-Model", "-LensModel", "-Software",
         "-FocalLength#", "-FNumber#", "-ExposureTime#", "-ISO#", // Numeric for calculations
+        "-ShutterSpeed#", "-Aperture#", // Composite tags for robustness
         "-DateTimeOriginal",
         "-RawImageWidth#", "-RawImageHeight#", "-ExifImageWidth#", "-ExifImageHeight#", "-ImageWidth#", "-ImageHeight#", // Numeric for dimensions
         "-Orientation#", // Numeric for robust rotation logic
-        "-MeteringMode", "-Flash", "-WhiteBalance", "-ExposureProgram", "-ExposureCompensation#", // Strings for display (except ExpComp)
-        "-Rating", "-Label", "-Urgency"
+        "-MeteringMode", "-Metering", // Metering
+        "-Flash", // Flash
+        "-WhiteBalance", "-Balance", // White Balance
+        "-ExposureProgram", "-ExposureMode", "-ShootingMode", "-CreativeStyle", // Program/Mode
+        "-ExposureCompensation#", // Strings for display (except ExpComp)
+        "-BrightnessValue#", "-ExposureBiasValue#", // Brightness/Bias
+        "-SerialNumber", "-BodySerialNumber", // Serial
+        "-Title", "-XMP:Title", "-ObjectName", // Title
+        "-Caption", "-Description", "-XMP:Description", "-ImageDescription", "-Caption-Abstract", // Caption
+        "-GPSLatitude#", "-GPSLongitude#", "-GPSAltitude#", "-GPSImgDirection#", // GPS
+        "-Rating", "-Label", "-Urgency",
+        "-XMP:Rating", "-XMP:Label" // Explicitly check XMP
     ]
     
     func readExifBatch(from urls: [URL]) async -> [URL: ExifMetadata] {
@@ -346,6 +364,7 @@ class ExifReader {
     }
     
     private func getExifToolPath() -> String? {
+        // 1. Check standard locations
         let paths = ["/usr/local/bin/exiftool", "/opt/homebrew/bin/exiftool", "/usr/bin/exiftool", "/opt/local/bin/exiftool"]
         for path in paths {
             if FileManager.default.fileExists(atPath: path) {
@@ -353,7 +372,18 @@ class ExifReader {
             }
         }
         
-        // Fallback: Try `which exiftool`
+        // 2. Check PATH environment variable
+        if let pathEnv = ProcessInfo.processInfo.environment["PATH"] {
+            let searchPaths = pathEnv.components(separatedBy: ":")
+            for searchPath in searchPaths {
+                let fullPath = (searchPath as NSString).appendingPathComponent("exiftool")
+                if FileManager.default.fileExists(atPath: fullPath) {
+                    return fullPath
+                }
+            }
+        }
+        
+        // 3. Fallback: Try `which exiftool`
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         process.arguments = ["exiftool"]
@@ -366,6 +396,7 @@ class ExifReader {
              return path
         }
         
+        print("ExifReader: ExifTool NOT found in standard paths or PATH.")
         return nil
     }
 
@@ -426,39 +457,59 @@ class ExifReader {
         var meta = ExifMetadata()
         meta.rawProps = output
         
+        // Helper to safely extract Double
+        func getDouble(_ key: String) -> Double? {
+            if let val = output[key] as? Double { return val }
+            if let val = output[key] as? Int { return Double(val) }
+            if let val = output[key] as? String {
+                // Handle "1/100" string for shutter speed if it comes as string despite #
+                if key == "ExposureTime" && val.contains("/") {
+                    let parts = val.split(separator: "/")
+                    if parts.count == 2, let num = Double(parts[0]), let den = Double(parts[1]), den != 0 {
+                        return num / den
+                    }
+                }
+                return Double(val)
+            }
+            return nil
+        }
+        
+        // Helper to safely extract Int
+        func getInt(_ key: String) -> Int? {
+            if let val = output[key] as? Int { return val }
+            if let val = output[key] as? Double { return Int(val) }
+            if let val = output[key] as? String { return Int(val) }
+            return nil
+        }
+        
         // Basic Fields
         meta.cameraMake = output["Make"] as? String
         meta.cameraModel = output["Model"] as? String
         meta.lensModel = output["LensModel"] as? String
         meta.software = output["Software"] as? String
         
-        // Focal Length (Numeric due to #)
-        if let fl = output["FocalLength"] as? Double {
-            meta.focalLength = fl
-        }
+        // Focal Length
+        meta.focalLength = getDouble("FocalLength")
         
-        // Aperture (Numeric due to #)
-        if let fn = output["FNumber"] as? Double {
-            meta.aperture = fn
-        }
+        // Aperture
+        // Aperture
+        meta.aperture = getDouble("FNumber") ?? getDouble("Aperture")
         
-        // Shutter Speed (Numeric due to #, format for display)
-        if let et = output["ExposureTime"] as? Double {
+        // Shutter Speed
+        if let et = getDouble("ExposureTime") ?? getDouble("ShutterSpeed") {
             meta.shutterSpeed = formatShutterSpeed(et)
         }
         
-        // ISO (Numeric due to #)
-        if let iso = output["ISO"] as? Int {
-            meta.iso = iso
-        }
+        // ISO
+        meta.iso = getInt("ISO")
         
-        // Dimensions (Numeric due to #)
-        let w = (output["RawImageWidth"] as? Int) ?? (output["ExifImageWidth"] as? Int) ?? (output["ImageWidth"] as? Int)
-        let h = (output["RawImageHeight"] as? Int) ?? (output["ExifImageHeight"] as? Int) ?? (output["ImageHeight"] as? Int)
+        // Dimensions
+        let w = getInt("RawImageWidth") ?? getInt("ExifImageWidth") ?? getInt("ImageWidth")
+        let h = getInt("RawImageHeight") ?? getInt("ExifImageHeight") ?? getInt("ImageHeight")
         
-        // Orientation (Numeric due to #)
+        // Orientation
         var orient = 1
-        if let o = output["Orientation"] as? Int {
+        if let o = getInt("Orientation") {
             orient = o
         }
         
@@ -478,19 +529,30 @@ class ExifReader {
         }
         
         // Extended Fields (Strings)
-        meta.meteringMode = output["MeteringMode"] as? String
+        meta.meteringMode = output["MeteringMode"] as? String ?? output["Metering"] as? String
         meta.flash = output["Flash"] as? String
-        meta.whiteBalance = output["WhiteBalance"] as? String
-        meta.exposureProgram = output["ExposureProgram"] as? String
-        meta.exposureCompensation = output["ExposureCompensation"] as? Double
+        meta.whiteBalance = output["WhiteBalance"] as? String ?? output["Balance"] as? String
+        meta.exposureProgram = output["ExposureProgram"] as? String ?? output["ExposureMode"] as? String ?? output["ShootingMode"] as? String ?? output["CreativeStyle"] as? String
+        meta.exposureCompensation = getDouble("ExposureCompensation")
+        
+        // New Fields
+        meta.brightnessValue = getDouble("BrightnessValue")
+        meta.exposureBias = getDouble("ExposureBiasValue")
+        meta.serialNumber = output["SerialNumber"] as? String ?? output["BodySerialNumber"] as? String
+        meta.title = output["Title"] as? String ?? output["ObjectName"] as? String
+        meta.caption = output["Caption"] as? String ?? output["Description"] as? String ?? output["ImageDescription"] as? String ?? output["Caption-Abstract"] as? String
+        meta.latitude = getDouble("GPSLatitude")
+        meta.longitude = getDouble("GPSLongitude")
+        meta.altitude = getDouble("GPSAltitude")
+        meta.imageDirection = getDouble("GPSImgDirection")
         
         // Rating
-        meta.rating = output["Rating"] as? Int
+        meta.rating = getInt("Rating") ?? getInt("XMP:Rating")
         
         // Label
-        if let label = output["Label"] as? String {
+        if let label = output["Label"] as? String ?? output["XMP:Label"] as? String {
             meta.colorLabel = label
-        } else if let urgency = output["Urgency"] as? Int {
+        } else if let urgency = getInt("Urgency") {
              switch urgency {
              case 1: meta.colorLabel = "Red"
              case 2: meta.colorLabel = "Orange"

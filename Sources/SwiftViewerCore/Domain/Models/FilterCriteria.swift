@@ -6,6 +6,16 @@ struct FilterCriteria: Codable {
     var showImages: Bool = true
     var showVideos: Bool = true
     var searchText: String = ""
+    var showOnlyFavorites: Bool = false
+    var flagFilter: FlagFilter = .all
+    
+    enum FlagFilter: String, CaseIterable, Codable {
+        case all = "All"
+        case flagged = "Flagged"  // Pick or Reject
+        case unflagged = "Unflagged"  // No flag
+        case pick = "Pick"  // flagStatus == 1
+        case reject = "Reject"  // flagStatus == -1
+    }
     
     // Metadata filters (Multi-selection)
     var selectedMakers: Set<String> = []
@@ -39,6 +49,7 @@ struct FilterCriteria: Codable {
         minRating > 0 || colorLabel != nil || !showImages || !showVideos || !searchText.isEmpty ||
         !selectedCameras.isEmpty || !selectedLenses.isEmpty || !selectedISOs.isEmpty ||
         !selectedDates.isEmpty || !selectedFileTypes.isEmpty || !selectedShutterSpeeds.isEmpty ||
-        !selectedApertures.isEmpty || !selectedFocalLengths.isEmpty
+        !selectedApertures.isEmpty || !selectedFocalLengths.isEmpty ||
+        showOnlyFavorites || flagFilter != .all
     }
 }

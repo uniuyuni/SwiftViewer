@@ -15,23 +15,30 @@ class EmbeddedPreviewExtractor {
     
     func extractThumbnail(from url: URL) -> NSImage? {
         // 1. Try ExifTool with ThumbnailImage
-        if let image = extractUsingExifTool(url: url, type: .thumbnail) {
-            return image
+        if let result = extractUsingExifTool(url: url, type: .thumbnail, skipRotation: false) {
+            return result.0
         }
         // 2. Fallback: Binary Scan (might return large preview, but better than nothing)
-        return extractUsingBinaryScan(url: url)
+        if let result = extractUsingBinaryScan(url: url, skipRotation: false) {
+            return result.0
+        }
+        return nil
     }
     
     func extractPreview(from url: URL) -> NSImage? {
+        return extractPreview(from: url, skipRotation: false).0
+    }
+
+    func extractPreview(from url: URL, skipRotation: Bool) -> (NSImage?, Int?) {
         // 1. Try ExifTool with PreviewImage/JpgFromRaw
-        if let image = extractUsingExifTool(url: url, type: .preview) {
-            return image
+        if let result = extractUsingExifTool(url: url, type: .preview, skipRotation: skipRotation) {
+            return result
         }
         // 2. Fallback: Binary Scan
-        return extractUsingBinaryScan(url: url)
+        return extractUsingBinaryScan(url: url, skipRotation: skipRotation) ?? (nil, nil)
     }
     
-    private func extractUsingExifTool(url: URL, type: PreviewType) -> NSImage? {
+    private func extractUsingExifTool(url: URL, type: PreviewType, skipRotation: Bool) -> (NSImage?, Int?)? {
         // Check if exiftool exists (simple check, maybe cache this)
         let exifToolPath = "/usr/local/bin/exiftool"
         guard FileManager.default.fileExists(atPath: exifToolPath) else { return nil }
@@ -69,14 +76,19 @@ class EmbeddedPreviewExtractor {
             process.waitUntilExit()
             
             if !data.isEmpty, let image = NSImage(data: data) {
-                return fixOrientation(of: image, from: data, url: url)
+                if skipRotation {
+                    let orientation = getOrientation(from: data, url: url)
+                    return (image, orientation)
+                } else {
+                    return (fixOrientation(of: image, from: data, url: url), nil)
+                }
             } else {
                 // If PreviewImage failed, try JpgFromRaw for previews (or PreviewImage if we tried JpgFromRaw first)
                 if type == .preview {
                     let ext = url.pathExtension.lowercased()
                     let tag = (ext == "raf") ? "-JpgFromRaw" : "-JpgFromRaw"
                     print("DEBUG: ExifTool primary tag failed for \(url.lastPathComponent), trying \(tag)")
-                    return extractUsingExifToolTag(url: url, tag: tag)
+                    return extractUsingExifToolTag(url: url, tag: tag, skipRotation: skipRotation)
                 }
                 
                 // Log error if needed
@@ -93,7 +105,7 @@ class EmbeddedPreviewExtractor {
         return nil
     }
     
-    private func extractUsingExifToolTag(url: URL, tag: String) -> NSImage? {
+    private func extractUsingExifToolTag(url: URL, tag: String, skipRotation: Bool) -> (NSImage?, Int?)? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/local/bin/exiftool")
         process.arguments = ["-b", tag, url.path]
@@ -107,7 +119,12 @@ class EmbeddedPreviewExtractor {
             process.waitUntilExit()
             
             if !data.isEmpty, let image = NSImage(data: data) {
-                return fixOrientation(of: image, from: data, url: url)
+                if skipRotation {
+                    let orientation = getOrientation(from: data, url: url)
+                    return (image, orientation)
+                } else {
+                    return (fixOrientation(of: image, from: data, url: url), nil)
+                }
             }
         } catch {
             return nil
@@ -274,7 +291,7 @@ class EmbeddedPreviewExtractor {
         return NSImage(cgImage: newCGImage, size: NSSize(width: newWidth, height: newHeight))
     }
     
-    private func extractUsingBinaryScan(url: URL) -> NSImage? {
+    private func extractUsingBinaryScan(url: URL, skipRotation: Bool) -> (NSImage?, Int?)? {
         // Read file data (mapped for performance)
         guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
         
@@ -319,7 +336,12 @@ class EmbeddedPreviewExtractor {
         }
         
         if let jpegData = largestData, let image = NSImage(data: jpegData) {
-            return fixOrientation(of: image, from: jpegData, url: url)
+            if skipRotation {
+                let orientation = getOrientation(from: jpegData, url: url)
+                return (image, orientation)
+            } else {
+                return (fixOrientation(of: image, from: jpegData, url: url), nil)
+            }
         }
         
         return nil

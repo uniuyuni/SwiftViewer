@@ -44,4 +44,13 @@ class CatalogViewModel: ObservableObject {
             print("Failed to delete catalog: \(error)")
         }
     }
+    
+    func renameCatalog(_ catalog: Catalog, newName: String) {
+        do {
+            try repository.renameCatalog(catalog, newName: newName)
+            loadCatalogs()
+        } catch {
+            print("Failed to rename catalog: \(error)")
+        }
+    }
 }

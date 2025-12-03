@@ -5,6 +5,7 @@ protocol CatalogRepositoryProtocol {
     func createCatalog(name: String) throws -> Catalog
     func fetchCatalogs() throws -> [Catalog]
     func deleteCatalog(_ catalog: Catalog) throws
+    func renameCatalog(_ catalog: Catalog, newName: String) throws
 }
 
 class CatalogRepository: CatalogRepositoryProtocol {
@@ -57,6 +58,12 @@ class CatalogRepository: CatalogRepositoryProtocol {
         }
         
         context.delete(catalog)
+        try context.save()
+    }
+    
+    func renameCatalog(_ catalog: Catalog, newName: String) throws {
+        catalog.name = newName
+        catalog.modifiedDate = Date()
         try context.save()
     }
 }

@@ -33,7 +33,22 @@
         <attribute name="lensModel" optional="YES" attributeType="String"/>
         <attribute name="rating" optional="YES" attributeType="Integer 16" usesScalarValueType="YES"/>
         <attribute name="rawProps" optional="YES" attributeType="Binary"/>
+        <attribute name="exposureCompensation" optional="YES" attributeType="Double" usesScalarValueType="YES" defaultValueString="0.0"/>
+        <attribute name="brightnessValue" optional="YES" attributeType="Double" defaultValueString="0.0"/>
+        <attribute name="exposureBias" optional="YES" attributeType="Double" defaultValueString="0.0"/>
+        <attribute name="serialNumber" optional="YES" attributeType="String"/>
+        <attribute name="title" optional="YES" attributeType="String"/>
+        <attribute name="caption" optional="YES" attributeType="String"/>
+        <attribute name="latitude" optional="YES" attributeType="Double" defaultValueString="0.0"/>
+        <attribute name="longitude" optional="YES" attributeType="Double" defaultValueString="0.0"/>
+        <attribute name="altitude" optional="YES" attributeType="Double" defaultValueString="0.0"/>
+        <attribute name="imageDirection" optional="YES" attributeType="Double" defaultValueString="0.0"/>
+        <attribute name="exposureProgram" optional="YES" attributeType="String"/>
+        <attribute name="flash" optional="YES" attributeType="String"/>
+        <attribute name="meteringMode" optional="YES" attributeType="String"/>
         <attribute name="shutterSpeed" optional="YES" attributeType="String"/>
+        <attribute name="software" optional="YES" attributeType="String"/>
+        <attribute name="whiteBalance" optional="YES" attributeType="String"/>
         <relationship name="mediaItem" optional="NO" maxCount="1" deletionRule="Nullify" destinationEntity="MediaItem" inverseName="exifData" inverseEntity="MediaItem"/>
     </entity>
     <entity name="MediaItem" representedClassName="MediaItem" syncable="YES">
@@ -42,9 +57,11 @@
         <attribute name="fileExists" optional="NO" attributeType="Boolean" usesScalarValueType="YES" defaultValueString="YES"/>
         <attribute name="fileName" optional="NO" attributeType="String"/>
         <attribute name="fileSize" optional="NO" attributeType="Integer 64" usesScalarValueType="YES" defaultValueString="0"/>
+        <attribute name="flagStatus" optional="NO" attributeType="Integer 16" usesScalarValueType="YES" defaultValueString="0"/>
         <attribute name="height" optional="NO" attributeType="Integer 32" usesScalarValueType="YES" defaultValueString="0"/>
         <attribute name="id" optional="NO" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="importDate" optional="NO" attributeType="Date" defaultDateTimeInterval="0"/>
+        <attribute name="isFavorite" optional="NO" attributeType="Boolean" usesScalarValueType="YES" defaultValueString="NO"/>
         <attribute name="isFlagged" optional="NO" attributeType="Boolean" usesScalarValueType="YES" defaultValueString="NO"/>
         <attribute name="mediaType" optional="NO" attributeType="String"/>
         <attribute name="modifiedDate" optional="NO" attributeType="Date" defaultDateTimeInterval="0"/>

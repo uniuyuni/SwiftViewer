@@ -5,6 +5,8 @@ import ImageIO
 final class RotationDebugTests: XCTestCase {
     
     func testDumpRotationMetadata() async throws {
+        throw XCTSkip("Skipping manual debug test")
+        /*
         let fileManager = FileManager.default
         let currentDirectory = URL(fileURLWithPath: fileManager.currentDirectoryPath)
         let testfilesURL = currentDirectory.appendingPathComponent("Testfiles")
@@ -61,5 +63,6 @@ final class RotationDebugTests: XCTestCase {
             print(String(format: "%-20s | %-10s | %-10s | %-15s", file.lastPathComponent, cgOrient, exifOrient, previewSize))
         }
         print("=================================\n")
+        */
     }
 }

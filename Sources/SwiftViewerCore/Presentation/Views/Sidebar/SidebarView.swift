@@ -4,7 +4,6 @@ struct SidebarView: View {
     @ObservedObject var viewModel: MainViewModel
     
     @State private var showCatalogManager = false
-    @State private var showImportView = false
     
     var body: some View {
         let selectionBinding = Binding<FileItem?>(
@@ -23,13 +22,15 @@ struct SidebarView: View {
                 viewModel: viewModel,
                 selection: selectionBinding,
                 showCatalogManager: $showCatalogManager,
-                showImportView: $showImportView,
                 folderToRename: $folderToRename,
                 newFolderName: $newFolderName,
                 showRenameAlert: $showRenameAlert,
                 showCollectionRenameAlert: $showCollectionRenameAlert,
                 collectionToRename: $collectionToRename,
-                newCollectionName: $newCollectionName
+                newCollectionName: $newCollectionName,
+                showCatalogRenameAlert: $showCatalogRenameAlert,
+                catalogToRename: $catalogToRename,
+                newCatalogName: $newCatalogName
             )
             .refreshableCommand {
                 refresh()
@@ -40,15 +41,6 @@ struct SidebarView: View {
         }
         .sheet(isPresented: $showCatalogManager) {
             CatalogManagerView(selectedCatalog: $viewModel.currentCatalog)
-        }
-        .sheet(isPresented: $showImportView) {
-            if let catalog = viewModel.currentCatalog {
-                ImportView(viewModel: ImportViewModel(catalog: catalog), mainViewModel: viewModel)
-                    .onDisappear {
-                        // Refresh items after import
-                        viewModel.openCatalog(catalog)
-                    }
-            }
         }
         .alert("Rename Folder", isPresented: $showRenameAlert) {
             TextField("New Name", text: $newFolderName)
@@ -64,6 +56,15 @@ struct SidebarView: View {
             Button("Rename") {
                 if let collection = collectionToRename, !newCollectionName.isEmpty {
                     viewModel.renameCollection(collection, newName: newCollectionName)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("Rename Catalog", isPresented: $showCatalogRenameAlert) {
+            TextField("New Name", text: $newCatalogName)
+            Button("Rename") {
+                if let catalog = catalogToRename, !newCatalogName.isEmpty {
+                    viewModel.renameCatalog(catalog, newName: newCatalogName)
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -137,6 +138,10 @@ struct SidebarView: View {
     @State private var collectionToRename: Collection?
     @State private var newCollectionName = ""
     
+    @State private var showCatalogRenameAlert = false
+    @State private var catalogToRename: Catalog?
+    @State private var newCatalogName = ""
+    
     private func refresh() {
         Task {
             if let folder = viewModel.currentFolder {
@@ -172,10 +177,12 @@ extension View {
 struct CatalogSection: View {
     @ObservedObject var viewModel: MainViewModel
     @Binding var showCatalogManager: Bool
-    @Binding var showImportView: Bool
     @Binding var folderToRename: URL?
     @Binding var newFolderName: String
     @Binding var showRenameAlert: Bool
+    @Binding var showCatalogRenameAlert: Bool
+    @Binding var catalogToRename: Catalog?
+    @Binding var newCatalogName: String
     
     var body: some View {
         Section("Catalogs") {
@@ -201,10 +208,6 @@ struct CatalogSection: View {
                 .contextMenu {
                     Button("Update Catalog") {
                         viewModel.triggerCatalogUpdateCheck(for: catalog)
-                    }
-                    
-                    Button("Rename") {
-                        // Implement catalog rename if needed (not requested but good practice)
                     }
                 }
                 
@@ -235,7 +238,7 @@ struct CatalogSection: View {
                 
                 }
                 
-                Button(action: { showImportView = true }) {
+                Button(action: { viewModel.presentImportDialog() }) {
                     Label("Import...", systemImage: "square.and.arrow.down")
                 }
                 .padding(.leading)
@@ -347,6 +350,10 @@ struct CatalogFolderNodeView: View {
         .cornerRadius(6)
         .onDrop(of: [.fileURL], delegate: FolderDropDelegate(targetFolder: FileItem(url: node.url, isDirectory: true), viewModel: viewModel))
         .contextMenu {
+            Button("Update Folder") {
+                viewModel.triggerFolderUpdateCheck(folder: node.url)
+            }
+            
             Button("Rename") {
                 folderToRename = node.url
                 newFolderName = node.name
@@ -410,13 +417,15 @@ struct SidebarListView: View {
     @Binding var selection: FileItem?
     
     @Binding var showCatalogManager: Bool
-    @Binding var showImportView: Bool
     @Binding var folderToRename: URL?
     @Binding var newFolderName: String
     @Binding var showRenameAlert: Bool
     @Binding var showCollectionRenameAlert: Bool
     @Binding var collectionToRename: Collection?
     @Binding var newCollectionName: String
+    @Binding var showCatalogRenameAlert: Bool
+    @Binding var catalogToRename: Catalog?
+    @Binding var newCatalogName: String
     
     var body: some View {
         List(selection: $selection) {
@@ -424,7 +433,7 @@ struct SidebarListView: View {
                 CollectionsSectionView(viewModel: viewModel, showCollectionRenameAlert: $showCollectionRenameAlert, collectionToRename: $collectionToRename, newCollectionName: $newCollectionName)
             }
             
-            CatalogSection(viewModel: viewModel, showCatalogManager: $showCatalogManager, showImportView: $showImportView, folderToRename: $folderToRename, newFolderName: $newFolderName, showRenameAlert: $showRenameAlert)
+            CatalogSection(viewModel: viewModel, showCatalogManager: $showCatalogManager, folderToRename: $folderToRename, newFolderName: $newFolderName, showRenameAlert: $showRenameAlert, showCatalogRenameAlert: $showCatalogRenameAlert, catalogToRename: $catalogToRename, newCatalogName: $newCatalogName)
             
             LocationsSection(viewModel: viewModel, folderToRename: $folderToRename, newFolderName: $newFolderName, showRenameAlert: $showRenameAlert)
         }

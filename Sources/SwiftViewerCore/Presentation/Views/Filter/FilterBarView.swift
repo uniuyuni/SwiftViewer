@@ -84,52 +84,125 @@ struct AttributeFilterView: View {
     @ObservedObject var viewModel: MainViewModel
     
     var body: some View {
-        HStack(spacing: 16) {
-            // Rating
-            HStack(spacing: 2) {
-                Text("Rating")
-                    .foregroundStyle(.secondary)
-                ForEach(1...5, id: \.self) { star in
-                    Image(systemName: viewModel.filterCriteria.minRating >= star ? "star.fill" : "star")
-                        .foregroundStyle(.orange)
-                        .onTapGesture {
-                            viewModel.filterCriteria.minRating = (viewModel.filterCriteria.minRating == star) ? 0 : star
-                            viewModel.applyFilter()
-                        }
-                }
-            }
-            
-            Divider()
-                .frame(height: 16)
-            
-            // Label
-            HStack(spacing: 4) {
-                Text("Label")
-                    .foregroundStyle(.secondary)
-                ForEach(["Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Gray"], id: \.self) { color in
-                    Circle()
-                        .fill(colorFromString(color))
-                        .frame(width: 12, height: 12)
-                        .overlay(
-                            Circle()
-                                .stroke(Color.primary, lineWidth: viewModel.filterCriteria.colorLabel == color ? 1 : 0)
-                        )
-                        .onTapGesture {
-                            if viewModel.filterCriteria.colorLabel == color {
-                                viewModel.filterCriteria.colorLabel = nil
-                            } else {
-                                viewModel.filterCriteria.colorLabel = color
+
+        VStack(alignment: .leading, spacing: 8) {
+            // Row 1: Rating & Label
+            HStack(spacing: 16) {
+                // Rating
+                HStack(spacing: 2) {
+                    Text("Rating")
+                        .foregroundStyle(.secondary)
+                    ForEach(1...5, id: \.self) { star in
+                        Image(systemName: viewModel.filterCriteria.minRating >= star ? "star.fill" : "star")
+                            .foregroundStyle(.orange)
+                            .onTapGesture {
+                                viewModel.filterCriteria.minRating = (viewModel.filterCriteria.minRating == star) ? 0 : star
+                                viewModel.applyFilter()
                             }
-                            viewModel.applyFilter()
-                        }
+                    }
                 }
+                
+                Divider()
+                    .frame(height: 16)
+                
+                // Label
+                HStack(spacing: 4) {
+                    Text("Label")
+                        .foregroundStyle(.secondary)
+                    ForEach(["Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Gray"], id: \.self) { color in
+                        Circle()
+                            .fill(colorFromString(color))
+                            .frame(width: 12, height: 12)
+                            .overlay(
+                                Circle()
+                                    .stroke(Color.primary, lineWidth: viewModel.filterCriteria.colorLabel == color ? 1 : 0)
+                            )
+                            .onTapGesture {
+                                if viewModel.filterCriteria.colorLabel == color {
+                                    viewModel.filterCriteria.colorLabel = nil
+                                } else {
+                                    viewModel.filterCriteria.colorLabel = color
+                                }
+                                viewModel.applyFilter()
+                            }
+                    }
+                }
+                
+                Spacer()
             }
             
-            Spacer() // Extend to full width
+            // Row 2: Favorites, Flags, Media Type
+            HStack(spacing: 16) {
+                // Favorites
+                Toggle(isOn: Binding(
+                    get: { viewModel.filterCriteria.showOnlyFavorites },
+                    set: {
+                        viewModel.filterCriteria.showOnlyFavorites = $0
+                        viewModel.applyFilter()
+                    }
+                )) {
+                    Image(systemName: viewModel.filterCriteria.showOnlyFavorites ? "heart.fill" : "heart")
+                        .foregroundStyle(viewModel.filterCriteria.showOnlyFavorites ? .pink : .secondary)
+                }
+                .toggleStyle(.button)
+                .buttonStyle(.plain)
+                .help("Show Only Favorites")
+                
+                Divider()
+                    .frame(height: 16)
+                
+                // Flags
+                Picker("Flag", selection: Binding(
+                    get: { viewModel.filterCriteria.flagFilter },
+                    set: {
+                        viewModel.filterCriteria.flagFilter = $0
+                        viewModel.applyFilter()
+                    }
+                )) {
+                    ForEach(FilterCriteria.FlagFilter.allCases, id: \.self) { flag in
+                        Text(flag.rawValue).tag(flag)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 100)
+                
+                Divider()
+                    .frame(height: 16)
+                
+                // Media Type
+                HStack(spacing: 0) {
+                    Toggle(isOn: Binding(
+                        get: { viewModel.filterCriteria.showImages },
+                        set: {
+                            viewModel.filterCriteria.showImages = $0
+                            viewModel.applyFilter()
+                        }
+                    )) {
+                        Image(systemName: "photo")
+                    }
+                    .toggleStyle(.button)
+                    .help("Show Images")
+                    
+                    Toggle(isOn: Binding(
+                        get: { viewModel.filterCriteria.showVideos },
+                        set: {
+                            viewModel.filterCriteria.showVideos = $0
+                            viewModel.applyFilter()
+                        }
+                    )) {
+                        Image(systemName: "video")
+                    }
+                    .toggleStyle(.button)
+                    .help("Show Videos")
+                }
+                
+                Spacer()
+            }
         }
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
     
     private func colorFromString(_ name: String) -> Color {
         switch name {

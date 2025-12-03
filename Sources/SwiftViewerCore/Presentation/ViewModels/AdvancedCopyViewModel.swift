@@ -33,7 +33,7 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
 
     // Files
     @Published var files: [FileItem] = []
-    @Published var selectedFileIDs: Set<URL> = [] {
+    @Published var selectedFileIDs: Set<String> = [] {
         didSet {
             // Debounce or throttle might be good, but for now direct update
             // Use Task to avoid blocking UI during selection
@@ -93,7 +93,7 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
             let gap = await self.eventSplitGap
             let format = await self.dateFormat
 
-            var toDeselect: Set<URL> = []
+            var toDeselect: Set<String> = []
 
             // If NOT organizing, simple check
             if !organize {
@@ -307,7 +307,7 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
     }
 
     // Caching
-    private var lastProcessedFileIDs: Set<URL> = []
+    private var lastProcessedFileIDs: Set<String> = []
     private var lastProcessedDestination: URL?
     private var lastProcessedOptions: String = ""  // Composite key of options that affect structure
 
@@ -973,6 +973,27 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
         // "In copy mode, if the virtual folder... already exists... display in red."
         // So Red is correct.
         // The "Gray" means it didn't detect existence.
+    }
+    
+    func createFolder(at parentURL: URL, name: String) {
+        let newURL = parentURL.appendingPathComponent(name)
+        do {
+            try FileManager.default.createDirectory(at: newURL, withIntermediateDirectories: false)
+            Logger.shared.log("AdvancedCopyViewModel: Created folder \(newURL.path)")
+            
+            // Post notification immediately to refresh tree
+            NotificationCenter.default.post(name: .refreshFileSystem, object: nil)
+            
+            // Refresh folder tree in background
+            Task {
+                await loadRootFolders()
+            }
+            
+            statusMessage = "Folder '\(name)' created successfully."
+        } catch {
+            Logger.shared.log("AdvancedCopyViewModel: Failed to create folder: \(error.localizedDescription)")
+            statusMessage = "Failed to create folder: \(error.localizedDescription)"
+        }
     }
 }
 

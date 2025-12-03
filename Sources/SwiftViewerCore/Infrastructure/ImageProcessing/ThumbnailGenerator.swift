@@ -6,12 +6,43 @@ class ThumbnailGenerator {
     static let shared = ThumbnailGenerator()
     private init() {}
     
+    // Concurrency Limiter
+    private actor ConcurrencyManager {
+        private var activeTasks = 0
+        private let maxTasks = 4 // Limit to 4 concurrent tasks
+        private var waiting: [CheckedContinuation<Void, Never>] = []
+
+        func enter() async {
+            if activeTasks < maxTasks {
+                activeTasks += 1
+                return
+            }
+            await withCheckedContinuation { continuation in
+                waiting.append(continuation)
+            }
+        }
+
+        func exit() {
+            if !waiting.isEmpty {
+                let continuation = waiting.removeFirst()
+                continuation.resume()
+            } else {
+                activeTasks -= 1
+            }
+        }
+    }
+    
+    private let concurrencyManager = ConcurrencyManager()
+    
     struct SendableImage: @unchecked Sendable {
         let image: NSImage?
     }
 
     func generateThumbnail(for url: URL, size: CGSize, orientation: Int? = nil) async -> NSImage? {
         if Task.isCancelled { return nil }
+        
+        await concurrencyManager.enter()
+        defer { Task { await concurrencyManager.exit() } }
         
         let key = "\(url.path)_\(Int(size.width))x\(Int(size.height))_v14"
         
@@ -47,25 +78,40 @@ class ThumbnailGenerator {
                 if isTooSmall {
                     print("DEBUG: Generated thumbnail for \(url.lastPathComponent) is too small (\(thumb.size) vs \(size)). LongEdge: \(thumbLongEdge) vs \(targetLongEdge). Trying EmbeddedPreviewExtractor.")
                     let largePreviewWrapper = await Task.detached(priority: .userInitiated) {
-                        let img = EmbeddedPreviewExtractor.shared.extractPreview(from: url)
-                        return SendableImage(image: img)
+                        // Use skipRotation: true to avoid rotating full-res image
+                        let (img, orient) = EmbeddedPreviewExtractor.shared.extractPreview(from: url, skipRotation: true)
+                        return (SendableImage(image: img), orient)
                     }.value
                     
-                    if let largePreview = largePreviewWrapper.image {
-                        print("DEBUG: EmbeddedPreviewExtractor returned image size: \(largePreview.size) for \(url.lastPathComponent)")
-                        // Resize to target size if needed
-                        // Embedded preview might be full size (e.g. 6000x4000), but we want 'size' (e.g. 1024x1024)
+                    if let largePreview = largePreviewWrapper.0.image {
+                        let orientation = largePreviewWrapper.1
+                        print("DEBUG: EmbeddedPreviewExtractor returned image size: \(largePreview.size) for \(url.lastPathComponent), orientation: \(String(describing: orientation))")
+                        
+                        // Resize FIRST (on unrotated image)
                         if let resized = self.resize(image: largePreview, to: size) {
                              print("DEBUG: Resized embedded preview to \(resized.size) for \(url.lastPathComponent)")
-                             ImageCacheService.shared.setImage(resized, forKey: key)
-                             return resized
+                             
+                             // Rotate AFTER resizing
+                             var finalImage = resized
+                             if let orient = orientation {
+                                 if let rotated = self.rotate(image: resized, orientation: orient) {
+                                     finalImage = rotated
+                                 }
+                             }
+                             
+                             ImageCacheService.shared.setImage(finalImage, forKey: key)
+                             return finalImage
                         } else {
                             print("DEBUG: Failed to resize embedded preview for \(url.lastPathComponent)")
                         }
                         
+                        // Fallback if resize failed (unlikely)
                         var finalImage = largePreview
-                        // EmbeddedPreviewExtractor already handles rotation. Do not rotate again.
-                        // if let orientation = orientation { ... }
+                        if let orient = orientation {
+                             if let rotated = self.rotate(image: largePreview, orientation: orient) {
+                                 finalImage = rotated
+                             }
+                        }
                         
                         ImageCacheService.shared.setImage(finalImage, forKey: key)
                         return finalImage
@@ -110,21 +156,38 @@ class ThumbnailGenerator {
         Logger.shared.log("DEBUG: ThumbnailGenerator falling back to EmbeddedPreviewExtractor for \(url.lastPathComponent)")
         let thumbWrapper = await Task.detached(priority: .utility) {
             // Use extractPreview to get higher quality thumbnail (ThumbnailImage is often too small)
-            let img = EmbeddedPreviewExtractor.shared.extractPreview(from: url)
-            return SendableImage(image: img)
+            // Use skipRotation: true
+            let (img, orient) = EmbeddedPreviewExtractor.shared.extractPreview(from: url, skipRotation: true)
+            return (SendableImage(image: img), orient)
         }.value
         
-        if var thumb = thumbWrapper.image {
-            // EmbeddedPreviewExtractor already handles rotation. Do not rotate again.
-            // if let orientation = orientation { ... }
-            ImageCacheService.shared.setImage(thumb, forKey: key)
-            return thumb
+        if let thumb = thumbWrapper.0.image {
+            let orientation = thumbWrapper.1
+            
+            // Resize first
+            var finalImage = thumb
+            if let resized = self.resize(image: thumb, to: size) {
+                finalImage = resized
+            }
+            
+            // Rotate after
+            if let orient = orientation {
+                if let rotated = self.rotate(image: finalImage, orientation: orient) {
+                    finalImage = rotated
+                }
+            }
+            
+            ImageCacheService.shared.setImage(finalImage, forKey: key)
+            return finalImage
         }
         
         return nil
     }
     
-    func generateThumbnailAndMetadataSync(for url: URL, size: CGSize) -> (NSImage?, ExifMetadata?) {
+    func generateThumbnailAndMetadataAsync(for url: URL, size: CGSize) async -> (NSImage?, ExifMetadata?) {
+        await concurrencyManager.enter()
+        defer { Task { await concurrencyManager.exit() } }
+        
         let key = "\(url.path)_\(Int(size.width))x\(Int(size.height))_v4"
         
         // Check cache for image
@@ -226,8 +289,8 @@ class ThumbnailGenerator {
         return (image, metadata)
     }
 
-    func generateThumbnailSync(for url: URL, size: CGSize) -> NSImage? {
-        return generateThumbnailAndMetadataSync(for: url, size: size).0
+    func generateThumbnailAsync(for url: URL, size: CGSize) async -> NSImage? {
+        return await generateThumbnailAndMetadataAsync(for: url, size: size).0
     }
 
     private func downsample(imageAt imageURL: URL, to pointSize: CGSize, scale: CGFloat = 1.0, applyTransform: Bool = true) -> NSImage? {

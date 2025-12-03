@@ -56,7 +56,7 @@ struct DetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(minWidth: 300)
+        .frame(minWidth: 100)
         // Hidden button for Space key shortcut
         .background {
             Button("") {

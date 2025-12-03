@@ -5,6 +5,8 @@ import ImageIO
 final class EmbeddedOrientationTests: XCTestCase {
     
     func testDumpEmbeddedOrientation() async throws {
+        throw XCTSkip("Skipping manual debug test")
+        /*
         let fileManager = FileManager.default
         let currentDirectory = URL(fileURLWithPath: fileManager.currentDirectoryPath)
         let testfilesURL = currentDirectory.appendingPathComponent("Testfiles")
@@ -30,7 +32,7 @@ final class EmbeddedOrientationTests: XCTestCase {
             
             // 2. Extract Embedded Data Orientation via Shell Pipe
             var embedOrient = "N/A"
-            var nsImageSize = "N/A"
+            let nsImageSize = "N/A"
             
             let pipeCommand = "exiftool -b -PreviewImage \"\(file.path)\" | exiftool -Orientation -n -"
             let process = Process()
@@ -55,7 +57,7 @@ final class EmbeddedOrientationTests: XCTestCase {
             
             // Check JpgFromRaw if PreviewImage failed (empty output)
             if embedOrient.isEmpty || embedOrient == "N/A" {
-                 let pipeCommand2 = "exiftool -b -JpgFromRaw \"\(file.path)\" | exiftool -Orientation -n -"
+                 // let pipeCommand2 = "exiftool -b -JpgFromRaw \"\(file.path)\" | exiftool -Orientation -n -"
                  // ... simplify for now, just mark as checked
                  embedOrient = "TryJpg"
             }
@@ -63,5 +65,6 @@ final class EmbeddedOrientationTests: XCTestCase {
             print(String(format: "%-20s | %-10s | %-10s | %-10s", file.lastPathComponent, rawOrient, embedOrient, nsImageSize))
         }
         print("==========================================\n")
+        */
     }
 }

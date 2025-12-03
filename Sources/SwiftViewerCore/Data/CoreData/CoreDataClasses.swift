@@ -8,6 +8,7 @@ public class Catalog: NSManagedObject, Identifiable {
     @NSManaged public var createdDate: Date?
     @NSManaged public var modifiedDate: Date?
     @NSManaged public var color: String?
+    @NSManaged public var isImporting: Bool
     @NSManaged public var mediaItems: NSSet?
     @NSManaged public var collections: NSSet?
 }
@@ -24,6 +25,8 @@ public class MediaItem: NSManagedObject, Identifiable {
     @NSManaged public var modifiedDate: Date?
     @NSManaged public var rating: Int16
     @NSManaged public var isFlagged: Bool
+    @NSManaged public var isFavorite: Bool
+    @NSManaged public var flagStatus: Int16
     @NSManaged public var colorLabel: String?
     @NSManaged public var orientation: Int16
     @NSManaged public var width: Int32
@@ -52,6 +55,21 @@ public class ExifData: NSManagedObject, Identifiable {
     @NSManaged public var descriptionText: String?
     @NSManaged public var rawProps: Data?
     @NSManaged public var rating: Int16
+    @NSManaged public var software: String?
+    @NSManaged public var meteringMode: String?
+    @NSManaged public var flash: String?
+    @NSManaged public var whiteBalance: String?
+    @NSManaged public var exposureProgram: String?
+    @NSManaged public var exposureCompensation: Double
+    @NSManaged public var brightnessValue: Double
+    @NSManaged public var exposureBias: Double
+    @NSManaged public var serialNumber: String?
+    @NSManaged public var title: String?
+    @NSManaged public var caption: String?
+    @NSManaged public var latitude: Double
+    @NSManaged public var longitude: Double
+    @NSManaged public var altitude: Double
+    @NSManaged public var imageDirection: Double
     @NSManaged public var mediaItem: MediaItem?
 }
 
