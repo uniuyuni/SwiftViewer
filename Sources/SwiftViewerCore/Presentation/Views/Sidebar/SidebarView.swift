@@ -40,7 +40,7 @@ struct SidebarView: View {
             }
         }
         .sheet(isPresented: $showCatalogManager) {
-            CatalogManagerView(selectedCatalog: $viewModel.currentCatalog)
+            CatalogManagerView(selectedCatalog: $viewModel.currentCatalog, isImporting: viewModel.isImporting)
         }
         .alert("Rename Folder", isPresented: $showRenameAlert) {
             TextField("New Name", text: $newFolderName)

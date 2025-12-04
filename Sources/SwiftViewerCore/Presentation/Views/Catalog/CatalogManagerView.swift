@@ -5,6 +5,7 @@ struct CatalogManagerView: View {
     @State private var newCatalogName = ""
     @State private var isCreating = false
     @Binding var selectedCatalog: Catalog?
+    var isImporting: Bool = false
     
     @State private var showDeleteAlert = false
     @State private var catalogToDelete: Catalog?
@@ -40,6 +41,7 @@ struct CatalogManagerView: View {
                 } label: {
                     Label("New", systemImage: "plus")
                 }
+                .disabled(isImporting)
                 
                 Button {
                     NotificationCenter.default.post(name: .requestOpenCatalog, object: nil)
@@ -47,6 +49,7 @@ struct CatalogManagerView: View {
                 } label: {
                     Label("Open", systemImage: "folder")
                 }
+                .disabled(isImporting)
             }
             
             Spacer()
