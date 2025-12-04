@@ -340,4 +340,84 @@ final class PerformanceTests: XCTestCase {
         
         XCTAssertTrue(true, "繰り返しキャッシュアクセスでメモリリークなし")
     }
+    
+    // MARK: - Metadata Operation Performance
+    
+    func testPerformance_BatchMetadataUpdate() async throws {
+        // 100ファイルのバッチ更新にかかる時間を測定
+        let files = (0..<100).map { i in
+            FileItem(url: URL(fileURLWithPath: "/test/photo\(i).jpg"), isDirectory: false)
+        }
+        
+        viewModel.allFiles = files
+        viewModel.appMode = .folders
+        
+        measure {
+            viewModel.updateRating(for: files, rating: 5)
+        }
+    }
+    
+    func testPerformance_MetadataCacheLookup() {
+        // 1000ファイルのキャッシュルックアップ速度を測定
+        let files = (0..<1000).map { i in
+            FileItem(url: URL(fileURLWithPath: "/test/photo\(i).jpg"), isDirectory: false)
+        }
+        
+        // キャッシュに事前登録
+        for file in files {
+            var meta = ExifMetadata()
+            meta.rating = Int.random(in: 0...5)
+            meta.colorLabel = ["Red", "Blue", "Green", nil][Int.random(in: 0...3)]
+            viewModel.metadataCache[file.url] = meta
+        }
+        
+        measure {
+            // 全ファイルのキャッシュルックアップ
+            for file in files {
+                _ = viewModel.metadataCache[file.url]
+            }
+        }
+    }
+    
+    func testPerformance_InspectorRefresh() {
+        // Inspector更新が50ms以内に完了することを確認
+        let file = FileItem(url: URL(fileURLWithPath: "/test/photo.jpg"), isDirectory: false)
+        
+        var meta = ExifMetadata()
+        meta.rating = 4
+        meta.colorLabel = "Blue"
+        meta.isFavorite = true
+        viewModel.metadataCache[file.url] = meta
+        
+        viewModel.currentFile = file
+        
+        let start = Date()
+        
+        // Inspector更新をシミュレート（currentFileを変更）
+        viewModel.currentFile = nil
+        viewModel.currentFile = file
+        
+        let elapsed = Date().timeIntervalSince(start)
+        
+        XCTAssertLessThan(elapsed, 0.05, "Inspector refresh should complete within 50ms")
+    }
+    
+    func testPerformance_ToggleFavoriteOnMixedSelection() {
+        // 混合選択（RGB+RAW）でのお気に入りトグルパフォーマンス
+        let rgbFiles = (0..<50).map { i in
+            FileItem(url: URL(fileURLWithPath: "/test/photo\(i).jpg"), isDirectory: false)
+        }
+        
+        let rawFiles = (0..<50).map { i in
+            FileItem(url: URL(fileURLWithPath: "/test/photo\(i).ARW"), isDirectory: false)
+        }
+        
+        let allFiles = rgbFiles + rawFiles
+        viewModel.appMode = .folders
+        
+        measure {
+            viewModel.toggleFavorite(for: allFiles)
+        }
+    }
 }
+

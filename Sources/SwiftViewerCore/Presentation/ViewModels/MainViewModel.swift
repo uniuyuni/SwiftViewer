@@ -1,5 +1,6 @@
 @preconcurrency import CoreData
 import SwiftUI
+import Combine
 
 extension Notification.Name {
     public static let refreshAll = Notification.Name("refreshAll")
@@ -28,6 +29,7 @@ public class MainViewModel: ObservableObject {
         }
     }
     private let fileSystemService = FileSystemService.shared
+    private var cancellables = Set<AnyCancellable>()
 
     @Published var rootFolders: [FileItem] = []
 
@@ -194,6 +196,15 @@ public class MainViewModel: ObservableObject {
                 self?.refreshFolders() // Check if current folder is valid
             }
         }
+        
+        // Setup thumbnailSize persistence
+        $thumbnailSize
+            .dropFirst() // Skip initial value
+            .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
+            .sink { size in
+                UserDefaults.standard.set(size, forKey: "defaultThumbnailSize")
+            }
+            .store(in: &cancellables)
     }
 
     func refreshFolders() {
@@ -1242,28 +1253,34 @@ public class MainViewModel: ObservableObject {
                 }
             }
 
+            // Get metadata from cache (for Folders mode overlay support)
+            let cachedMeta = metadataCache[item.url]
+            
             // Color Label Filter
             if let label = filterCriteria.colorLabel {
-                if item.colorLabel != label { return false }
+                let itemLabel = cachedMeta?.colorLabel ?? item.colorLabel
+                if itemLabel != label { return false }
             }
 
             // Favorites Filter
             if filterCriteria.showOnlyFavorites {
-                if item.isFavorite != true { return false }
+                let isFav = cachedMeta?.isFavorite ?? item.isFavorite
+                if isFav != true { return false }
             }
 
             // Flag Filter
+            let itemFlag = cachedMeta?.flagStatus ?? Int(item.flagStatus ?? 0)
             switch filterCriteria.flagFilter {
             case .all:
                 break
             case .flagged:
-                if item.flagStatus == 0 || item.flagStatus == nil { return false }
+                if itemFlag == 0 { return false }
             case .unflagged:
-                if item.flagStatus != 0 && item.flagStatus != nil { return false }
+                if itemFlag != 0 { return false }
             case .pick:
-                if item.flagStatus != 1 { return false }
+                if itemFlag != 1 { return false }
             case .reject:
-                if item.flagStatus != -1 { return false }
+                if itemFlag != -1 { return false }
             }
 
             // Media Type Filter
@@ -2531,11 +2548,8 @@ public class MainViewModel: ObservableObject {
     // But we can keep it if needed or remove it. The previous implementation was unused.
     // Let's rely on applyFilter logic we added earlier.
 
-    @Published var thumbnailSize: CGFloat = 150 {
-        didSet {
-            UserDefaults.standard.set(thumbnailSize, forKey: "defaultThumbnailSize")
-        }
-    }
+    @Published var thumbnailSize: CGFloat = 150
+
 
     @Published var gridColumnsCount: Int = 1
 
@@ -2657,8 +2671,7 @@ public class MainViewModel: ObservableObject {
         // For Rating, we just persist.
 
         Task {
-            // Write to XMP/Sidecar?
-            // For now, just update Core Data if in Catalog Mode
+            // Update Core Data
             let context = persistenceController.newBackgroundContext()
             await context.perform {
                 let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
@@ -2684,6 +2697,9 @@ public class MainViewModel: ObservableObject {
                     )
                 }
             }
+            
+            // Write to file (XMP/Exif)
+            await self.writeMetadataBatch(to: [item.url], rating: rating, label: nil)
 
             await MainActor.run {
                 self.applyFilter()

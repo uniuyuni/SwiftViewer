@@ -124,16 +124,14 @@ public struct MainWindow: View {
     @ViewBuilder
     private var detailContent: some View {
         HStack(spacing: 0) {
-            HSplitView {
+            PersistentSplitView(
+                autosaveName: "MainSplitView",
+                isVertical: true,
+                hideSecondPane: !viewModel.isPreviewVisible
+            ) {
                 GridView(viewModel: viewModel)
-                    .frame(minWidth: 400)
-                    .frame(maxWidth: .infinity)
-                
-                if viewModel.isPreviewVisible {
-                    DetailView(viewModel: viewModel)
-                        .frame(minWidth: 100)
-                        .frame(maxWidth: .infinity)
-                }
+            } content2: {
+                DetailView(viewModel: viewModel)
             }
             
             if viewModel.isInspectorVisible {
