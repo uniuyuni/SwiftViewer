@@ -1,11 +1,15 @@
 import CoreData
 
-public struct PersistenceController {
+import CoreData
+
+public class PersistenceController {
     public static let shared = PersistenceController()
 
-    public let container: NSPersistentContainer
+    public var container: NSPersistentContainer
+    private var currentStoreURL: URL?
 
     public init(inMemory: Bool = false) {
+        // ... (Model loading logic remains same, extracted to helper if possible but keeping inline for now)
         // We need to load the model from the package bundle
         // Try .momd first (model bundle)
         var modelURL = Bundle.module.url(forResource: "SwiftViewer", withExtension: "momd")
@@ -16,7 +20,6 @@ public struct PersistenceController {
         }
         
         if modelURL == nil {
-            print("DEBUG: Bundle.module path: \(Bundle.module.bundlePath)")
             // Fallback 1: Check for the specific resource bundle in the main bundle (App Bundle case)
             if let bundleURL = Bundle.main.url(forResource: "SwiftViewer_SwiftViewerCore", withExtension: "bundle"),
                let bundle = Bundle(url: bundleURL) {
@@ -65,29 +68,57 @@ public struct PersistenceController {
 
         container = NSPersistentContainer(name: "SwiftViewer", managedObjectModel: finalModel)
         
-        if inMemory {
-            container.persistentStoreDescriptions.first!.url = URL(fileURLWithPath: "/dev/null")
-        }
+        // Default to in-memory store to avoid creating "SwiftViewer.sqlite" in Application Support
+        // The user must explicitly open a catalog to persist data.
+        let description = NSPersistentStoreDescription()
+        description.type = NSInMemoryStoreType
+        // Explicitly set URL to /dev/null to prevent any directory creation attempts
+        description.url = URL(fileURLWithPath: "/dev/null")
+        container.persistentStoreDescriptions = [description]
         
-        // Enable automatic migration
-        if let description = container.persistentStoreDescriptions.first {
-            description.shouldMigrateStoreAutomatically = true
-            description.shouldInferMappingModelAutomatically = true
-        }
-        
-        print("DEBUG: Loading persistent stores...")
         container.loadPersistentStores(completionHandler: { (storeDescription, error) in
             if let error = error as NSError? {
-                print("DEBUG: Failed to load store: \(error), \(error.userInfo)")
-                // fatalError("Unresolved error \(error), \(error.userInfo)") // Don't crash, just log?
-                // If we don't crash, the app might run but be broken.
-                // But for debugging, let's see the error.
                 fatalError("Unresolved error \(error), \(error.userInfo)")
             }
         })
-        print("DEBUG: Persistent stores loaded.")
         
         container.viewContext.automaticallyMergesChangesFromParent = true
+    }
+    
+    public func switchToCatalog(at url: URL) {
+        // Save current context if needed
+        if container.viewContext.hasChanges {
+            try? container.viewContext.save()
+        }
+        
+        // Create new container with same model
+        let model = container.managedObjectModel
+        let newContainer = NSPersistentContainer(name: "SwiftViewer", managedObjectModel: model)
+        
+        let description = NSPersistentStoreDescription(url: url)
+        description.shouldMigrateStoreAutomatically = true
+        description.shouldInferMappingModelAutomatically = true
+        newContainer.persistentStoreDescriptions = [description]
+        
+        newContainer.loadPersistentStores { (storeDescription, error) in
+            if let error = error as NSError? {
+                print("Failed to load store at \(url): \(error)")
+                // Fallback or error handling?
+            }
+        }
+        
+        newContainer.viewContext.automaticallyMergesChangesFromParent = true
+        
+        // Replace container
+        self.container = newContainer
+        self.currentStoreURL = url
+        
+        // Notify change
+        NotificationCenter.default.post(name: .coreDataStackChanged, object: nil)
+    }
+    
+    public var currentContext: NSManagedObjectContext {
+        return container.viewContext
     }
     
     public func newBackgroundContext() -> NSManagedObjectContext {
@@ -537,4 +568,10 @@ public struct PersistenceController {
         model.entities = [catalog, mediaItem, exifData, collection]
         return model
     }
+}
+
+extension Notification.Name {
+    static let coreDataStackChanged = Notification.Name("coreDataStackChanged")
+    static let requestNewCatalog = Notification.Name("requestNewCatalog")
+    static let requestOpenCatalog = Notification.Name("requestOpenCatalog")
 }

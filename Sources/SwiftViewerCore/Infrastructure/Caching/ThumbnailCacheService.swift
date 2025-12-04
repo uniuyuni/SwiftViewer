@@ -4,19 +4,29 @@ import SwiftUI
 class ThumbnailCacheService {
     static let shared = ThumbnailCacheService()
     
-    private let cacheDirectory: URL
+    private var cacheDirectory: URL
     private let memoryCache = NSCache<NSString, NSImage>()
     
     private init() {
+        // Default location (will be updated by CatalogService)
         let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
         let appSupport = paths[0].appendingPathComponent("SwiftViewer")
         cacheDirectory = appSupport.appendingPathComponent("Thumbnails")
         
-        try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        // NOTE: Do NOT create directory here to avoid creating empty folders in Application Support
+        // unless actually used (e.g. default catalog).
+        // try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
         
         // Configure memory cache
         memoryCache.countLimit = 500 // Keep 500 thumbnails in memory
         memoryCache.totalCostLimit = 100 * 1024 * 1024 // 100 MB
+    }
+    
+    public func updateCacheDirectory(to url: URL) {
+        cacheDirectory = url
+        memoryCache.removeAllObjects()
+        // Create directory only when explicitly updated (i.e. opening a catalog)
+        try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
     }
     
     public enum ThumbnailType {
@@ -30,6 +40,11 @@ class ThumbnailCacheService {
     }
     
     func saveThumbnail(image: NSImage, for id: UUID, type: ThumbnailType = .thumbnail) {
+        // Ensure directory exists before saving
+        if !FileManager.default.fileExists(atPath: cacheDirectory.path) {
+            try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        }
+
         // Save to Memory (only thumbnails, previews are too big)
         if type == .thumbnail {
             memoryCache.setObject(image, forKey: id.uuidString as NSString)
@@ -41,7 +56,11 @@ class ThumbnailCacheService {
               let data = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.35]) else { return }
         
         let url = cachePath(for: id, type: type)
-        try? data.write(to: url)
+        do {
+            try data.write(to: url)
+        } catch {
+            print("Failed to save thumbnail: \(error)")
+        }
     }
     
     func loadFromMemory(for id: UUID) -> NSImage? {
@@ -81,8 +100,21 @@ class ThumbnailCacheService {
         memoryCache.removeObject(forKey: id.uuidString as NSString)
         let thumbUrl = cachePath(for: id, type: .thumbnail)
         let previewUrl = cachePath(for: id, type: .preview)
-        try? FileManager.default.removeItem(at: thumbUrl)
-        try? FileManager.default.removeItem(at: previewUrl)
+        
+        do {
+            if FileManager.default.fileExists(atPath: thumbUrl.path) {
+                try FileManager.default.removeItem(at: thumbUrl)
+                print("Deleted thumbnail: \(thumbUrl.lastPathComponent)")
+            } else {
+                // print("Thumbnail not found for deletion: \(thumbUrl.lastPathComponent)")
+            }
+            
+            if FileManager.default.fileExists(atPath: previewUrl.path) {
+                try FileManager.default.removeItem(at: previewUrl)
+            }
+        } catch {
+            print("Failed to delete thumbnail for \(id): \(error)")
+        }
     }
     
     func cleanupOrphanedThumbnails(validUUIDs: Set<UUID>) {

@@ -6,7 +6,7 @@ import ImageIO
 public protocol MediaRepositoryProtocol {
     func addMediaItem(from url: URL, to catalog: Catalog) async throws -> MediaItem
     func fetchMediaItems(in catalog: Catalog) throws -> [MediaItem]
-    func importMediaItems(from urls: [URL], to catalogID: NSManagedObjectID, progress: (@Sendable (Double) -> Void)?) async throws
+    func importMediaItems(from urls: [URL], to catalogID: NSManagedObjectID, progress: (@Sendable (Double) -> Void)?) async throws -> [NSManagedObjectID]
 }
 
 public class MediaRepository: MediaRepositoryProtocol {
@@ -90,21 +90,23 @@ public class MediaRepository: MediaRepositoryProtocol {
     }
     
     // New method for background import
-    public func importMediaItems(from urls: [URL], to catalogID: NSManagedObjectID, progress: (@Sendable (Double) -> Void)? = nil) async throws {
+    public func importMediaItems(from urls: [URL], to catalogID: NSManagedObjectID, progress: (@Sendable (Double) -> Void)? = nil) async throws -> [NSManagedObjectID] {
         let container = PersistenceController.shared.container
         let allowedExtensions = FileConstants.allAllowedExtensions
         
+        if Task.isCancelled { throw CancellationError() }
         progress?(0.05)
         
         // 1. Scan files (I/O) - Can be done in parallel
         // We'll do a simple scan first
         let filesToImport = scanFiles(from: urls, allowedExtensions: Set(allowedExtensions))
         
+        if Task.isCancelled { throw CancellationError() }
         progress?(0.1)
         
         if filesToImport.isEmpty {
             progress?(1.0)
-            return
+            return []
         }
         
         // 2. Read Exif Data (Async I/O)
@@ -120,6 +122,8 @@ public class MediaRepository: MediaRepositoryProtocol {
         var processedCount = 0
         
         for i in stride(from: 0, to: filesToImport.count, by: chunkSize) {
+            if Task.isCancelled { throw CancellationError() }
+            
             let end = min(i + chunkSize, filesToImport.count)
             let chunk = Array(filesToImport[i..<end])
             
@@ -131,14 +135,18 @@ public class MediaRepository: MediaRepositoryProtocol {
             progress?(currentProgress)
         }
         
+        if Task.isCancelled { throw CancellationError() }
+        
         // 3. Write to DB (Core Data)
         // Use newBackgroundContext and await perform to ensure we wait for completion
         let bgContext = container.newBackgroundContext()
         bgContext.automaticallyMergesChangesFromParent = true
         bgContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
         
-        try await bgContext.perform {
-            guard let catalog = bgContext.object(with: catalogID) as? Catalog else { return }
+        let result: [NSManagedObjectID] = try await bgContext.perform {
+            if Task.isCancelled { throw CancellationError() }
+            
+            guard let catalog = bgContext.object(with: catalogID) as? Catalog else { return [] }
             
             // Fetch existing paths to prevent duplicates
             let existingPathsRequest: NSFetchRequest<NSFetchRequestResult> = MediaItem.fetchRequest()
@@ -154,6 +162,8 @@ public class MediaRepository: MediaRepositoryProtocol {
             var importedItems: [MediaItem] = []
             
             for (_, url) in filesToImport.enumerated() {
+                if Task.isCancelled { throw CancellationError() }
+                
                 if existingPathSet.contains(url.path) {
                     continue // Skip existing
                 }
@@ -243,9 +253,12 @@ public class MediaRepository: MediaRepositoryProtocol {
                 
                 savedCount += 1
                 if savedCount % 100 == 0 {
+                    if Task.isCancelled { throw CancellationError() }
                     try? bgContext.save()
                 }
             }
+            
+            if Task.isCancelled { throw CancellationError() }
             
             if bgContext.hasChanges {
                 try bgContext.save()
@@ -254,16 +267,12 @@ public class MediaRepository: MediaRepositoryProtocol {
                 print("DEBUG: No changes to save in import.")
             }
             
-            // Enqueue thumbnails
-            let ids = importedItems.map { $0.objectID }
-            if !ids.isEmpty {
-                Task { @MainActor in
-                    ThumbnailGenerationService.shared.enqueue(items: ids)
-                }
-            }
+            // Return imported IDs for caller to handle thumbnails
+            return importedItems.map { $0.objectID }
         }
         
         progress?(1.0)
+        return result
     }
     
     public func fetchMediaItems(in catalog: Catalog) throws -> [MediaItem] {

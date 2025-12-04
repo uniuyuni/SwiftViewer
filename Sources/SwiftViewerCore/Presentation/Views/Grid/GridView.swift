@@ -112,7 +112,7 @@ struct GridView: View {
             if let collection = viewModel.currentCollection {
                 return collection.name ?? "Collection"
             } else if let folder = viewModel.selectedCatalogFolder {
-                return folder.lastPathComponent
+                return folder.url.lastPathComponent
             } else if let catalog = viewModel.currentCatalog {
                 return catalog.name ?? "Catalog"
             }

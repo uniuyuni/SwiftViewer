@@ -33,6 +33,22 @@ struct CatalogManagerView: View {
     
     private var headerView: some View {
         HStack {
+            HStack(spacing: 12) {
+                Button {
+                    NotificationCenter.default.post(name: .requestNewCatalog, object: nil)
+                    dismiss()
+                } label: {
+                    Label("New", systemImage: "plus")
+                }
+                
+                Button {
+                    NotificationCenter.default.post(name: .requestOpenCatalog, object: nil)
+                    dismiss()
+                } label: {
+                    Label("Open", systemImage: "folder")
+                }
+            }
+            
             Spacer()
             Text("Manage Catalogs")
                 .font(.headline)

@@ -99,6 +99,7 @@ struct SidebarView: View {
                 await MainActor.run {
                     viewModel.fileSystemRefreshID = UUID()
                 }
+
             }
         }
     }
@@ -304,7 +305,7 @@ struct CatalogFolderNodeView: View {
     @State private var showRemoveConfirmation = false
     
     var isSelected: Bool {
-        viewModel.selectedCatalogFolder == node.url
+        viewModel.selectedCatalogFolder?.url == node.url
     }
     
     var isExpanded: Binding<Bool> {

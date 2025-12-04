@@ -1,6 +1,7 @@
 @preconcurrency import CoreData
 import SwiftUI
 import Combine
+import UniformTypeIdentifiers
 
 extension Notification.Name {
     public static let refreshAll = Notification.Name("refreshAll")
@@ -9,6 +10,16 @@ extension Notification.Name {
 @MainActor
 public class MainViewModel: ObservableObject {
     @Published var currentFolder: FileItem?
+    @Published var selectedCatalogFolder: FileItem? {
+        didSet {
+            if let url = selectedCatalogFolder?.url {
+                UserDefaults.standard.set(url.path, forKey: "lastSelectedCatalogFolder")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "lastSelectedCatalogFolder")
+            }
+        }
+    }
+    @Published var catalogs: [Catalog] = []
 
     @Published var fileItems: [FileItem] = []
     @Published var allFiles: [FileItem] = []  // Store all files in current folder/catalog before filtering
@@ -58,7 +69,8 @@ public class MainViewModel: ObservableObject {
     @Published public var isLoadingMetadata: Bool = false
     @Published public var isLoading: Bool = false
     private var metadataTask: Task<Void, Never>?
-
+    private var importTask: Task<Void, Never>?
+    
     // Inspector State
     @Published var isInspectorVisible: Bool = false {
         didSet {
@@ -77,8 +89,8 @@ public class MainViewModel: ObservableObject {
 
     // thumbnailSize is declared at the top
 
-    private let mediaRepository: MediaRepositoryProtocol
-    private let collectionRepository: CollectionRepositoryProtocol
+    private var mediaRepository: MediaRepositoryProtocol
+    private var collectionRepository: CollectionRepositoryProtocol
     private let persistenceController: PersistenceController
 
     public init(
@@ -183,7 +195,8 @@ public class MainViewModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: 1_000_000_000) // 1.0s
                 await self?.loadRootFolders()
                 // Resume thumbnail generation if needed
-                self?.checkMissingThumbnails()
+                // Resume thumbnail generation if needed
+                self?.checkForMetadataMismatches()
             }
         }
         
@@ -205,6 +218,90 @@ public class MainViewModel: ObservableObject {
                 UserDefaults.standard.set(size, forKey: "defaultThumbnailSize")
             }
             .store(in: &cancellables)
+
+        // Listen for core data stack changes
+        NotificationCenter.default.publisher(for: .coreDataStackChanged)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.handleCoreDataStackChange()
+            }
+            .store(in: &cancellables)
+            
+        NotificationCenter.default.publisher(for: .requestNewCatalog)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.createNewCatalog() }
+            .store(in: &cancellables)
+            
+        NotificationCenter.default.publisher(for: .requestOpenCatalog)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.openCatalog() }
+            .store(in: &cancellables)
+    }
+
+    private func handleCoreDataStackChange() {
+        // Reload everything related to Core Data, e.g., catalogs and collections
+        print("CoreDataStackChanged notification received. Reloading catalogs.")
+        
+        // Reset state
+        self.currentCatalog = nil
+        self.fileItems = []
+        self.fileItems = []
+        self.catalogs = []
+        
+        // Re-initialize repositories with new context
+        let newContext = persistenceController.container.viewContext
+        self.mediaRepository = MediaRepository(context: newContext)
+        self.collectionRepository = CollectionRepository(context: newContext)
+        
+        // Reload
+        loadCatalogs()
+        
+        // If we have a catalog, select it (optional, maybe select first one)
+        if let first = catalogs.first {
+            selectCatalog(first)
+        }
+    }
+    
+    func createNewCatalog() {
+        let panel = NSSavePanel()
+        panel.title = "Create New Catalog"
+        panel.allowedContentTypes = [UTType(filenameExtension: "svdata")!]
+        panel.nameFieldStringValue = "New Catalog"
+        
+        if panel.runModal() == .OK, let url = panel.url {
+            CatalogService.shared.createCatalog(at: url)
+        }
+    }
+    
+    func openCatalog() {
+        let panel = NSOpenPanel()
+        panel.title = "Open Catalog"
+        panel.allowedContentTypes = [UTType(filenameExtension: "svdata")!]
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        
+        if panel.runModal() == .OK, let url = panel.url {
+            CatalogService.shared.openCatalog(at: url)
+        }
+    }
+
+
+    
+    func loadCatalogs() {
+        let request: NSFetchRequest<Catalog> = Catalog.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Catalog.name, ascending: true)]
+        
+        do {
+            catalogs = try persistenceController.container.viewContext.fetch(request)
+        } catch {
+            print("Failed to load catalogs: \(error)")
+        }
+    }
+    
+    func selectCatalog(_ catalog: Catalog) {
+        currentCatalog = catalog
+        loadMediaItems(from: catalog)
+        loadCollections(for: catalog)
     }
 
     func refreshFolders() {
@@ -342,7 +439,13 @@ public class MainViewModel: ObservableObject {
         ThumbnailGenerationService.shared.cancelAll()
 
         metadataTask?.cancel()  // Cancel any running metadata task from folder mode
-
+        
+        // NOTE: We do NOT cancel importTask here.
+        // If an import is running, it should finish writing to the OLD catalog's DB.
+        // The MediaRepository handles checking for cancellation if needed, but for catalog switching,
+        // we want the DB import to finish so data isn't lost.
+        // Thumbnail generation for the old catalog will be skipped because we called cancelAll().
+        
         appMode = .catalog
         currentCatalog = catalog
         saveCurrentCatalogID()  // Save selection
@@ -380,7 +483,11 @@ public class MainViewModel: ObservableObject {
         appMode = .catalog
         currentFolder = nil
         currentCollection = nil  // Clear collection selection
-        selectedCatalogFolder = url
+        if let url = url {
+            selectedCatalogFolder = FileItem(url: url, isDirectory: true)
+        } else {
+            selectedCatalogFolder = nil
+        }
         // Reset filters when changing folder in catalog
         filterCriteria = FilterCriteria()
         isFilterDisabled = false
@@ -408,7 +515,7 @@ public class MainViewModel: ObservableObject {
         // Security Scope Access for App Sandbox
         let access = url.startAccessingSecurityScopedResource()
 
-        Task.detached(priority: .utility) { [weak self] in
+        importTask = Task.detached(priority: .utility) { [weak self] in
             guard let self = self else {
                 if access { url.stopAccessingSecurityScopedResource() }
                 return
@@ -441,9 +548,18 @@ public class MainViewModel: ObservableObject {
 
                 // 2. Import using Repository (background)
                 // Pass folder URL directly, repository handles recursion
-                try await self.mediaRepository.importMediaItems(from: [url], to: catalogObjectID) { progress in
+                let importedIDs = try await self.mediaRepository.importMediaItems(from: [url], to: catalogObjectID) { progress in
                     Task { @MainActor in
                         self.importProgress = progress
+                    }
+                }
+
+                // 3. Enqueue Thumbnails (ONLY if we are still in the same catalog)
+                await MainActor.run {
+                    if self.currentCatalog?.objectID == catalogObjectID {
+                        ThumbnailGenerationService.shared.enqueue(items: importedIDs)
+                    } else {
+                        Logger.shared.log("Import finished for previous catalog. Skipping thumbnail generation.")
                     }
                 }
 
@@ -809,18 +925,10 @@ public class MainViewModel: ObservableObject {
         }
     }
 
-    @Published var selectedCatalogFolder: URL? {  // Filter catalog by folder
-        didSet {
-            if let url = selectedCatalogFolder {
-                UserDefaults.standard.set(url.path, forKey: "lastSelectedCatalogFolder")
-            } else {
-                UserDefaults.standard.removeObject(forKey: "lastSelectedCatalogFolder")
-            }
-        }
-    }
+
 
     func applyFilter() {
-        print("DEBUG: applyFilter called. appMode=\(appMode), currentCatalog=\(currentCatalog?.name ?? "nil"), selectedCatalogFolder=\(selectedCatalogFolder?.path ?? "nil")")
+        print("DEBUG: applyFilter called. appMode=\(appMode), currentCatalog=\(currentCatalog?.name ?? "nil"), selectedCatalogFolder=\(selectedCatalogFolder?.url.path ?? "nil")")
         
         // Track time
         let startTime = Date()
@@ -852,7 +960,7 @@ public class MainViewModel: ObservableObject {
                 print("DEBUG: Filter disabled. allMediaItems count: \(allMediaItems.count)")
                 var items = allMediaItems
                 if let folder = selectedCatalogFolder {
-                    let folderPath = folder.path
+                    let folderPath = folder.url.path
                     items = items.filter { item in
                         guard let path = item.originalPath else { return false }
                         return URL(fileURLWithPath: path).deletingLastPathComponent().path
@@ -881,12 +989,12 @@ public class MainViewModel: ObservableObject {
         } else if appMode == .catalog, currentCatalog != nil {
             // Filter from allMediaItems
             print("DEBUG: Filter enabled. allMediaItems count: \(allMediaItems.count)")
-            print("DEBUG: Checking selectedCatalogFolder: \(selectedCatalogFolder?.path ?? "nil")")
+            print("DEBUG: Checking selectedCatalogFolder: \(selectedCatalogFolder?.url.path ?? "nil")")
             var items = allMediaItems
 
             // Apply Folder Filter if active
             if let folder = selectedCatalogFolder {
-                let folderPath = folder.path
+                let folderPath = folder.url.path
                 print("DEBUG: Filtering for folder: \(folderPath)")
                 items = items.filter { item in
                     guard let path = item.originalPath else { return false }
@@ -1491,7 +1599,8 @@ public class MainViewModel: ObservableObject {
             startBackgroundThumbnailLoading(for: fileItems)
             
             // Resume thumbnail generation if needed
-            checkMissingThumbnails()
+                // Resume thumbnail generation if needed
+                self.checkForMetadataMismatches()
             
         } catch {
             print("Failed to load media items: \(error)")
@@ -1819,7 +1928,7 @@ public class MainViewModel: ObservableObject {
 
                 // Catalog Mode Sync
                 if self.appMode == .catalog, let catalogFolder = self.selectedCatalogFolder,
-                    catalogFolder == folder.url
+                    catalogFolder.url == folder.url
                 {
                     Logger.shared.log(
                         "MainViewModel: FileSystem change detected in Catalog Folder: \(folder.url.lastPathComponent)"
@@ -2118,8 +2227,9 @@ public class MainViewModel: ObservableObject {
     }
     
     // MARK: - Thumbnail Resume
-    func checkMissingThumbnails() {
+    func checkForMetadataMismatches() {
         guard let catalog = currentCatalog else { return }
+        let catalogID = catalog.objectID
         
         Task.detached(priority: .utility) { [weak self] in
             guard let self = self else { return }
@@ -2129,7 +2239,7 @@ public class MainViewModel: ObservableObject {
             
             await context.perform {
                 let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
-                request.predicate = NSPredicate(format: "catalog == %@", catalog)
+                request.predicate = NSPredicate(format: "catalog == %@", catalogID)
                 
                 if let items = try? context.fetch(request) {
                     for item in items {
@@ -2493,59 +2603,61 @@ public class MainViewModel: ObservableObject {
     
     func removeFolderFromCatalog(_ folderURL: URL) {
         guard let catalog = currentCatalog else { return }
-
+        let catalogID = catalog.objectID
         let folderPath = folderURL.path
-        let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
-        // We want to remove items that are IN this folder or subfolders.
-        // So path starts with folderPath.
-        // Ensure folderPath ends with / for correct prefix matching if needed, but usually path doesn't.
-        // NSPredicate "BEGINSWITH" works.
-        request.predicate = NSPredicate(format: "originalPath BEGINSWITH %@", folderPath)
 
-        do {
-            let items = try persistenceController.container.viewContext.fetch(request)
-            // We should only delete items that belong to the current catalog?
-            // MediaItems are linked to a catalog.
-            // But wait, fetchRequest above fetches ALL MediaItems matching path.
-            // We must ensure they belong to the current catalog.
-            // MediaItem has 'catalog' relationship.
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self = self else { return }
             
-            // Delete items
-            let context = persistenceController.container.viewContext
+            let context = self.persistenceController.newBackgroundContext()
             
-            // Cancel generation first
-            let objectIDs = items.map { $0.objectID }
-            ThumbnailGenerationService.shared.cancelGeneration(for: objectIDs)
-            
-            for item in items {
-                // Remove thumbnail
-                let uuid = item.id ?? UUID()
-                ThumbnailCacheService.shared.deleteThumbnail(for: uuid)
+            // 1. Perform DB operations (Synchronous block inside perform)
+            await context.perform {
+                let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
+                guard let ctxCatalog = context.object(with: catalogID) as? Catalog else { return }
                 
-                context.delete(item)
+                request.predicate = NSPredicate(format: "catalog == %@ AND originalPath BEGINSWITH %@", ctxCatalog, folderPath)
+
+                do {
+                    let items = try context.fetch(request)
+                    
+                    // Cancel generation first
+                    let objectIDs = items.map { $0.objectID }
+                    ThumbnailGenerationService.shared.cancelGeneration(for: objectIDs)
+                    
+                    for item in items {
+                        // Remove thumbnail
+                        let uuid = item.id ?? UUID()
+                        ThumbnailCacheService.shared.deleteThumbnail(for: uuid)
+                        
+                        context.delete(item)
+                    }
+                    
+                    try context.save()
+                    
+                } catch {
+                    print("Failed to remove folder from catalog: \(error)")
+                }
             }
             
-            try context.save()
-            
-            // UI Updates on MainActor
-            Task { @MainActor in
+            // 2. UI Updates on MainActor (After DB op is done)
+            await MainActor.run {
                 // If current file is in the removed folder, clear it
                 if let current = self.currentFile, current.url.path.hasPrefix(folderPath) {
                     self.currentFile = nil
                 }
                 
                 // Refresh catalog view
-                self.loadMediaItems(from: catalog)
+                if let currentCatalog = self.currentCatalog, currentCatalog.objectID == catalogID {
+                    self.loadMediaItems(from: currentCatalog)
+                    
+                    // Clear selection if we removed the selected folder or its parent
+                    if let selected = self.selectedCatalogFolder, selected.url.path.hasPrefix(folderPath) {
+                        self.selectedCatalogFolder = nil
+                        self.applyFilter()
+                    }
+                }
             }
-            
-            // Clear selection if we removed the selected folder or its parent
-            if let selected = selectedCatalogFolder, selected.path.hasPrefix(folderPath) {
-                selectedCatalogFolder = nil
-                applyFilter()
-            }
-
-        } catch {
-            print("Failed to remove folder from catalog: \(error)")
         }
     }
 
@@ -3721,12 +3833,13 @@ public class MainViewModel: ObservableObject {
     
     func optimizeCatalog() {
         guard let catalog = currentCatalog else { return }
+        let catalogID = catalog.objectID
         
         Task.detached(priority: .utility) {
             let context = PersistenceController.shared.newBackgroundContext()
             await context.perform {
                 let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
-                request.predicate = NSPredicate(format: "catalog == %@", catalog.objectID)
+                request.predicate = NSPredicate(format: "catalog == %@", catalogID)
                 request.propertiesToFetch = ["id"]
                 
                 if let items = try? context.fetch(request) {
@@ -3738,9 +3851,7 @@ public class MainViewModel: ObservableObject {
     }
     
     // Legacy method removed or redirected
-    func checkForMetadataMismatches() {
-        triggerCatalogUpdateCheck()
-    }
+    // checkForMetadataMismatches is implemented above
     
     // ... (checkForUpdates implementation is fine, but we need to ensure it returns stats)
     

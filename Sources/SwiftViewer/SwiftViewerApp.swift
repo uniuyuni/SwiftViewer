@@ -6,6 +6,10 @@ import AppKit
 struct SwiftViewerApp: App {
     @Environment(\.openWindow) var openWindow
     
+    init() {
+        CatalogService.shared.loadDefaultCatalog()
+    }
+    
     var body: some Scene {
         WindowGroup(id: "main") {
             MainWindow()
