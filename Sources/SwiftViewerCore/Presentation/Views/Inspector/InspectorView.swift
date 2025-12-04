@@ -42,8 +42,18 @@ struct InspectorView: View {
         )
     }
     
+    private var editableSelection: [FileItem] {
+        let selection = Array(viewModel.selectedFiles)
+        if viewModel.appMode == .catalog {
+            return selection
+        } else {
+            // In Folders mode, only include non-RAW files for common state calculation
+            return selection.filter { !isRAW($0) }
+        }
+    }
+
     private var commonRating: Int {
-        let selection = viewModel.selectedFiles
+        let selection = editableSelection
         guard !selection.isEmpty else { return 0 }
         
         let firstRating = viewModel.metadataCache[selection.first!.url]?.rating ?? 0
@@ -52,7 +62,7 @@ struct InspectorView: View {
     }
     
     private var commonLabel: String? {
-        let selection = viewModel.selectedFiles
+        let selection = editableSelection
         guard !selection.isEmpty else { return nil }
         
         // Use metadata cache if available
@@ -65,7 +75,7 @@ struct InspectorView: View {
     }
     
     private var commonFavorite: Bool? {
-        let selection = viewModel.selectedFiles
+        let selection = editableSelection
         guard !selection.isEmpty else { return nil }
         
         // Use metadata cache if available
@@ -78,7 +88,7 @@ struct InspectorView: View {
     }
     
     private var commonFlag: Int? {
-        let selection = viewModel.selectedFiles
+        let selection = editableSelection
         guard !selection.isEmpty else { return nil }
         
         // Use metadata cache if available
@@ -116,8 +126,9 @@ struct InspectorView: View {
                 .disabled(!anyEditable)
             }
             
-            // Favorite (Catalog only)
-            if viewModel.appMode == .catalog {
+            // Favorite (Available in both modes, read-only for RAW in Folders)
+            // if viewModel.appMode == .catalog { // Removed to allow RGB editing in Folders
+            if true {
                 HStack {
                     Text("Favorite")
                     Spacer()
@@ -390,57 +401,63 @@ struct InspectorView: View {
                     .disabled(isRAW(item) && viewModel.appMode != .catalog)
                 }
                 
-                // Favorite (Catalog only)
-                if viewModel.appMode == .catalog {
-                    HStack {
-                        Text("Favorite")
-                        Spacer()
+                // Favorite
+                HStack {
+                    Text("Favorite")
+                    Spacer()
+                    Button(action: {
+                        viewModel.toggleFavorite(for: [item])
+                    }) {
+                        let isFav = viewModel.metadataCache[item.url]?.isFavorite ?? item.isFavorite
+                        Image(systemName: isFav == true ? "heart.fill" : "heart")
+                            .foregroundStyle(isFav == true ? .pink : .gray)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .opacity((!isRAW(item) || viewModel.appMode == .catalog) ? 1.0 : 0.5)
+                .disabled(isRAW(item) && viewModel.appMode != .catalog)
+                
+                // Flag
+                HStack {
+                    Text("Flag")
+                    Spacer()
+                    HStack(spacing: 8) {
+                        let flagStatus = viewModel.metadataCache[item.url]?.flagStatus ?? Int(item.flagStatus ?? 0)
+                        
                         Button(action: {
-                            viewModel.toggleFavorite(for: [item])
+                            viewModel.setFlagStatus(for: [item], status: 1)
                         }) {
-                            Image(systemName: item.isFavorite == true ? "heart.fill" : "heart")
-                                .foregroundStyle(item.isFavorite == true ? .pink : .gray)
+                            Image(systemName: "flag.fill")
+                                .foregroundStyle(flagStatus == 1 ? Color.green : Color.gray)
+                        }
+                        .buttonStyle(.plain)
+                        
+                        Button(action: {
+                            viewModel.setFlagStatus(for: [item], status: -1)
+                        }) {
+                            Image(systemName: "flag.slash.fill")
+                                .foregroundStyle(flagStatus == -1 ? Color.red : Color.gray)
+                        }
+                        .buttonStyle(.plain)
+                        
+                        Button(action: {
+                            viewModel.setFlagStatus(for: [item], status: 0)
+                        }) {
+                            Image(systemName: "xmark.circle")
+                                .foregroundStyle(flagStatus == 0 ? Color(nsColor: .labelColor) : Color.gray)
                         }
                         .buttonStyle(.plain)
                     }
-                    
-                    // Flag
-                    HStack {
-                        Text("Flag")
-                        Spacer()
-                        HStack(spacing: 8) {
-                            Button(action: {
-                                viewModel.setFlagStatus(for: [item], status: 1)
-                            }) {
-                                Image(systemName: "flag.fill")
-                                    .foregroundStyle(item.flagStatus == 1 ? Color.green : Color.gray)
-                            }
-                            .buttonStyle(.plain)
-                            
-                            Button(action: {
-                                viewModel.setFlagStatus(for: [item], status: -1)
-                            }) {
-                                Image(systemName: "flag.slash.fill")
-                                    .foregroundStyle(item.flagStatus == -1 ? Color.red : Color.gray)
-                            }
-                            .buttonStyle(.plain)
-                            
-                            Button(action: {
-                                viewModel.setFlagStatus(for: [item], status: 0)
-                            }) {
-                                Image(systemName: "xmark.circle")
-                                    .foregroundStyle(item.flagStatus == 0 ? Color(nsColor: .labelColor) : Color.gray)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
                 }
+                .opacity((!isRAW(item) || viewModel.appMode == .catalog) ? 1.0 : 0.5)
+                .disabled(isRAW(item) && viewModel.appMode != .catalog)
                 
                 // Color Label
                 HStack {
                     Text("Label")
                     Spacer()
-                    ColorLabelPicker(selection: item.colorLabel) { newLabel in
+                    let label = viewModel.metadataCache[item.url]?.colorLabel ?? item.colorLabel
+                    ColorLabelPicker(selection: label) { newLabel in
                         viewModel.updateColorLabel(for: item, label: newLabel)
                     }
                     // Enable if NOT RAW OR (Is RAW AND In Catalog)

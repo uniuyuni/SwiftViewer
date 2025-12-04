@@ -6,6 +6,13 @@ struct GridView: View {
     
     var body: some View {
         GeometryReader { geo in
+            let spacing: CGFloat = 10
+            let minSize = viewModel.thumbnailSize
+            // Round width to nearest 10 pixels to prevent micro-changes
+            let roundedWidth = (geo.size.width / 10).rounded() * 10
+            let availableWidth = max(0, roundedWidth - 32)
+            let columnsCount = max(1, Int((availableWidth + spacing) / (minSize + spacing)))
+            
             VStack(spacing: 0) {
                 FilterBarView(viewModel: viewModel)
                 
@@ -14,7 +21,7 @@ struct GridView: View {
                         if viewModel.fileItems.isEmpty {
                             emptyStateView(viewModel: viewModel)
                         } else {
-                            gridContent(proxy: proxy)
+                            gridContent(columnsCount: columnsCount, proxy: proxy)
                         }
                     }
                 }
@@ -22,14 +29,24 @@ struct GridView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .frame(minWidth: 400)
             .background(Color(nsColor: .windowBackgroundColor))
+            .onChange(of: geo.size.width) { _, width in
+                let spacing: CGFloat = 10
+                let minSize = viewModel.thumbnailSize
+                let availableWidth = max(0, width - 32)
+                let cols = max(1, Int((availableWidth + spacing) / (minSize + spacing)))
+                
+                // Only update if column count actually changes (debounce)
+                if viewModel.gridColumnsCount != cols {
+                    viewModel.gridColumnsCount = cols
+                }
+            }
             .onAppear {
-                updateGridColumns(width: geo.size.width)
-            }
-            .onChange(of: geo.size.width) { _, newWidth in
-                updateGridColumns(width: newWidth)
-            }
-            .onChange(of: viewModel.thumbnailSize) { _, _ in
-                updateGridColumns(width: geo.size.width)
+                // Initial calculation
+                let spacing: CGFloat = 10
+                let minSize = viewModel.thumbnailSize
+                let availableWidth = max(0, geo.size.width - 32)
+                let cols = max(1, Int((availableWidth + spacing) / (minSize + spacing)))
+                viewModel.gridColumnsCount = cols
             }
         }
         // Keyboard handling at root level
@@ -108,10 +125,9 @@ struct GridView: View {
     }
     
     @ViewBuilder
-    private func gridContent(proxy: ScrollViewProxy) -> some View {
+    private func gridContent(columnsCount: Int, proxy: ScrollViewProxy) -> some View {
         let spacing: CGFloat = 10
         let minSize = viewModel.thumbnailSize
-        let columnsCount = max(1, viewModel.gridColumnsCount)
         
         // Use fixed column count with .flexible to prevent layout recalculation jitter
         let columns = Array(repeating: GridItem(.flexible(minimum: minSize), spacing: spacing), count: columnsCount)
@@ -163,17 +179,6 @@ struct GridView: View {
         }
     }
 
-    private func updateGridColumns(width: CGFloat) {
-        let spacing: CGFloat = 10
-        let minSize = viewModel.thumbnailSize
-        let availableWidth = max(0, width - 32) // Account for padding
-        let cols = max(1, Int((availableWidth + spacing) / (minSize + spacing)))
-        
-        // Always update to prevent thumbnails from being hidden
-        if viewModel.gridColumnsCount != cols {
-            viewModel.gridColumnsCount = cols
-        }
-    }
     
     @ViewBuilder
     @MainActor
@@ -251,6 +256,16 @@ struct GridItemWrapper: View {
                 Button("Blue") { viewModel.updateColorLabel(for: targetItems, label: "Blue") }
                 Button("Purple") { viewModel.updateColorLabel(for: targetItems, label: "Purple") }
                 Button("Gray") { viewModel.updateColorLabel(for: targetItems, label: "Gray") }
+            }
+            
+            Button(viewModel.selectedFiles.first?.isFavorite == true ? "Unfavorite" : "Favorite") {
+                viewModel.toggleFavorite(for: targetItems)
+            }
+            
+            Menu("Flag") {
+                Button("Flagged") { viewModel.setFlagStatus(for: targetItems, status: 1) }
+                Button("Unflagged") { viewModel.setFlagStatus(for: targetItems, status: 0) }
+                Button("Rejected") { viewModel.setFlagStatus(for: targetItems, status: -1) }
             }
             
             Divider()

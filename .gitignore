@@ -7,3 +7,5 @@
 TESTFILES/
 *.jpg
 *.png
+build_*
+test_*

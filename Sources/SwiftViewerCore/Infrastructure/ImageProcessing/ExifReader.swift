@@ -34,6 +34,7 @@ public struct ExifMetadata: @unchecked Sendable {
     public var longitude: Double?
     public var altitude: Double?
     public var imageDirection: Double?
+    public var keywords: [String]?
     public var rawProps: [String: Any]? // Dictionary for internal use, will be serialized
 }
 
@@ -282,7 +283,8 @@ class ExifReader {
         "-Caption", "-Description", "-XMP:Description", "-ImageDescription", "-Caption-Abstract", // Caption
         "-GPSLatitude#", "-GPSLongitude#", "-GPSAltitude#", "-GPSImgDirection#", // GPS
         "-Rating", "-Label", "-Urgency",
-        "-XMP:Rating", "-XMP:Label" // Explicitly check XMP
+        "-XMP:Rating", "-XMP:Label", // Explicitly check XMP
+        "-Subject", "-Keywords", "-XMP:Subject" // Keywords for Favorite/Flag
     ]
     
     func readExifBatch(from urls: [URL]) async -> [URL: ExifMetadata] {
@@ -563,6 +565,39 @@ class ExifReader {
              case 7: meta.colorLabel = "Gray"
              default: break
              }
+        }
+        
+        // Keywords
+        var keywords: [String] = []
+        if let subject = output["Subject"] as? [String] {
+            keywords.append(contentsOf: subject)
+        } else if let subject = output["Subject"] as? String {
+            keywords.append(subject)
+        }
+        
+        if let k = output["Keywords"] as? [String] {
+            keywords.append(contentsOf: k)
+        } else if let k = output["Keywords"] as? String {
+            keywords.append(k)
+        }
+        
+        if !keywords.isEmpty {
+            meta.keywords = Array(Set(keywords)) // Deduplicate
+            
+            // Derive Favorite/Flag
+            if keywords.contains("Favorite") {
+                meta.isFavorite = true
+            } else {
+                meta.isFavorite = false
+            }
+            
+            if keywords.contains("Pick") {
+                meta.flagStatus = 1
+            } else if keywords.contains("Reject") {
+                meta.flagStatus = -1
+            } else {
+                meta.flagStatus = 0
+            }
         }
         
         return meta

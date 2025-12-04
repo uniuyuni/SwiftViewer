@@ -13,7 +13,7 @@ final class MetadataFilteringTests: XCTestCase {
     override func setUpWithError() throws {
         persistenceController = PersistenceController(inMemory: true)
         context = persistenceController.container.viewContext
-        viewModel = MainViewModel(persistenceController: persistenceController)
+        viewModel = MainViewModel(persistenceController: persistenceController, inMemory: true)
     }
     
     override func tearDownWithError() throws {

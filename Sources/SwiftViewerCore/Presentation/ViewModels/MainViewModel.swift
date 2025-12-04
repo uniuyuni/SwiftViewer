@@ -54,6 +54,7 @@ public class MainViewModel: ObservableObject {
     // Metadata Cache for Locations mode
     @Published public var metadataCache: [URL: ExifMetadata] = [:]
     @Published public var isLoadingMetadata: Bool = false
+    @Published public var isLoading: Bool = false
     private var metadataTask: Task<Void, Never>?
 
     // Inspector State
@@ -81,7 +82,8 @@ public class MainViewModel: ObservableObject {
     public init(
         mediaRepository: MediaRepositoryProtocol? = nil,
         collectionRepository: CollectionRepositoryProtocol? = nil,
-        persistenceController: PersistenceController = .shared
+        persistenceController: PersistenceController = .shared,
+        inMemory: Bool = false
     ) {
         self.persistenceController = persistenceController
         self.mediaRepository =
@@ -92,7 +94,7 @@ public class MainViewModel: ObservableObject {
         // rootFolders loaded in loadRootFolders()
         
         // Skip ExifTool check in tests to prevent Process execution crashes
-        let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil || inMemory
         
         if !isTesting {
             self.isExifToolAvailable = MetadataService.shared.isExifToolAvailable()
@@ -914,6 +916,7 @@ public class MainViewModel: ObservableObject {
                 // In folder mode, filter from allFiles instead of reloading from disk
                 let filtered = filterFileItems(allFiles)
                 fileItems = sortItems(filtered)
+                print("DEBUG: fileItems count after sort: \(fileItems.count)")
             }
         }
 
@@ -1690,8 +1693,9 @@ public class MainViewModel: ObservableObject {
     }
 
     private var loadingTask: Task<Void, Never>?
-
-    private func loadFiles(in folder: FileItem) {
+    
+    // Internal for testing
+    func loadFiles(in folder: FileItem) {
         // Cancel previous task
         loadingTask?.cancel()
 
@@ -1732,8 +1736,15 @@ public class MainViewModel: ObservableObject {
             }
 
             // Sort in background (now fast due to pre-fetched attributes)
-            let sortedFiles = FileSortService.sortFiles(
+            var sortedFiles = FileSortService.sortFiles(
                 rawFiles, by: currentSortOption, ascending: currentSortAscending)
+            
+            // Enrich with Catalog Data (Overlay)
+            // We do this in background to avoid blocking Main Thread
+            // Enrich with Catalog Data (Overlay)
+            // We do this in background to avoid blocking Main Thread
+            // We do this in background to avoid blocking Main Thread
+            sortedFiles = self.enrichItemsWithCatalogData(sortedFiles, persistenceController: self.persistenceController)
             let sortTime = Date()
             Logger.shared.log("DEBUG: Sort took \(sortTime.timeIntervalSince(fsTime))s")
 
@@ -1750,12 +1761,15 @@ public class MainViewModel: ObservableObject {
                 // Note: Filter should preserve order
                 let filtered = self.filterFileItems(self.allFiles)
                 self.fileItems = filtered
-
+                
+                // Apply current sort (just in case filter messed up order, but usually filter preserves)
+                // Actually, we already sorted `allFiles`. `filterFileItems` preserves order.
+                
                 let mainEnd = Date()
-                print(
-                    "DEBUG: MainActor update took \(mainEnd.timeIntervalSince(mainStart))s. Total: \(mainEnd.timeIntervalSince(startTime))s"
-                )
-
+                // Logger.shared.log("DEBUG: MainActor update took \(mainEnd.timeIntervalSince(mainStart))s")
+                
+                self.isLoading = false
+                
                 // Start background metadata loading
                 Task {
                     await self.loadMetadataForCurrentFolder()
@@ -1764,7 +1778,7 @@ public class MainViewModel: ObservableObject {
                 // Start background thumbnail pre-fetching
                 self.startBackgroundThumbnailLoading(for: filtered)
             }
-        }
+            }
 
         // Start monitoring (MainActor is fine for setup, but callback is async)
         FileSystemMonitor.shared.startMonitoring(url: folder.url) { [weak self] in
@@ -1825,6 +1839,65 @@ public class MainViewModel: ObservableObject {
             }
         }
     }
+    }
+    
+    /// Enriches FileItems with metadata from the Catalog (Core Data) if available.
+    /// This allows "Overlaying" catalog data (Rating, Label, etc.) on top of file system data
+    /// when browsing in Folders mode.
+    // Internal for testing
+    nonisolated func enrichItemsWithCatalogData(_ items: [FileItem], persistenceController: PersistenceController) -> [FileItem] {
+        // We need to access Core Data. Since we are in detached task, use newBackgroundContext.
+        let context = persistenceController.newBackgroundContext()
+        var enrichedItems = items
+        
+        context.performAndWait {
+            // Optimize: Fetch all relevant MediaItems in one go
+            // We match by originalPath.
+            let paths = items.map { $0.url.path }
+            let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
+            request.predicate = NSPredicate(format: "originalPath IN %@", paths)
+            
+            do {
+                let mediaItems = try context.fetch(request)
+                // Create a map for fast lookup
+                let mediaItemMap = Dictionary(uniqueKeysWithValues: mediaItems.compactMap { item -> (String, MediaItem)? in
+                    guard let path = item.originalPath else { return nil }
+                    return (path, item)
+                })
+                
+                // Update FileItems
+                for i in 0..<enrichedItems.count {
+                    let path = enrichedItems[i].url.path
+                    if let mediaItem = mediaItemMap[path] {
+                        var item = enrichedItems[i]
+                        
+                        // Overlay Metadata
+                        // Rating
+                        item.rating = Int(mediaItem.rating)
+                        
+                        // Label (Color)
+                        if let label = mediaItem.colorLabel {
+                            item.colorLabel = label
+                        }
+                        
+                        // Favorite
+                        item.isFavorite = mediaItem.isFavorite
+                        
+                        // Flag
+                        item.flagStatus = mediaItem.flagStatus
+                        
+                        // UUID (Link to Catalog Item)
+                        item.uuid = mediaItem.id
+                        
+                        enrichedItems[i] = item
+                    }
+                }
+            } catch {
+                Logger.shared.log("Failed to fetch catalog data for enrichment: \(error)")
+            }
+        }
+        
+        return enrichedItems
     }
     
     private var thumbnailLoadingTask: Task<Void, Never>?
@@ -2546,12 +2619,7 @@ public class MainViewModel: ObservableObject {
 
     func updateRating(for item: FileItem, rating: Int) {
         // RAW Restriction: Only allow if in Catalog mode
-        let ext = item.url.pathExtension.lowercased()
-        let isRaw =
-            FileConstants.allowedImageExtensions.contains(ext)
-            && !["jpg", "jpeg", "png", "heic", "tiff", "gif", "webp"].contains(ext)
-
-        if isRaw && appMode != .catalog {
+        if appMode == .folders && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased()) {
             Logger.shared.log(
                 "MainViewModel: Skipped rating update for RAW file in Folders mode: \(item.name)")
             return
@@ -2632,8 +2700,13 @@ public class MainViewModel: ObservableObject {
     }
 
     func updateRating(for items: [FileItem], rating: Int) {
-        // 1. Update Metadata Cache (Optimistic)
+        // 1. Update Metadata Cache (Optimistic) - Skip RAW in Folders mode
         for item in items {
+            // In Folders mode, skip RAW files
+            if appMode == .folders && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased()) {
+                continue
+            }
+            
             if var meta = metadataCache[item.url] {
                 meta.rating = rating
                 metadataCache[item.url] = meta
@@ -2664,9 +2737,15 @@ public class MainViewModel: ObservableObject {
                 try? context.save()
             }
             
-            // Write to File (Batch)
-            let urls = items.map { $0.url }
-            self.writeMetadataBatch(to: urls, rating: rating, label: nil)
+            // Write to File (Batch) - Filter RAW files in Folders mode
+            let editableItems: [FileItem]
+            if self.appMode == .folders {
+                editableItems = items.filter { !FileConstants.rawExtensions.contains($0.url.pathExtension.lowercased()) }
+            } else {
+                editableItems = items
+            }
+            let urls = editableItems.map { $0.url }
+            await self.writeMetadataBatch(to: urls, rating: rating, label: nil)
             
             await MainActor.run {
                 self.applyFilter()
@@ -2679,6 +2758,11 @@ public class MainViewModel: ObservableObject {
         
         // Update Metadata Cache (Optimistic)
         for item in items {
+            // In Folders mode, skip RAW files
+            if appMode == .folders && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased()) {
+                continue
+            }
+            
             if var meta = metadataCache[item.url] {
                 meta.colorLabel = label
                 metadataCache[item.url] = meta
@@ -2693,6 +2777,11 @@ public class MainViewModel: ObservableObject {
         
         // 1. Update allFiles and fileItems
         for item in items {
+            // In Folders mode, skip RAW files for in-memory update (they are read-only)
+            if appMode == .folders && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased()) {
+                continue
+            }
+            
             var updatedItem: FileItem?
             
             // Update allFiles
@@ -2774,7 +2863,7 @@ public class MainViewModel: ObservableObject {
             // Write to File (Batch)
             let urls = items.map { $0.url }
             // For label update, we pass rating: nil (preserve rating)
-            self.writeMetadataBatch(to: urls, rating: nil, label: label ?? "")
+            await self.writeMetadataBatch(to: urls, rating: nil, label: label ?? "")
             
             await MainActor.run {
                 self.applyFilter()
@@ -2785,18 +2874,34 @@ public class MainViewModel: ObservableObject {
     // MARK: - Favorite and Flag Status
     
     func toggleFavorite(for items: [FileItem]) {
-        guard appMode == .catalog else { return }
+        // guard appMode == .catalog else { return } // Allow for non-catalog too (RGB only)
         
         // Determine target state
         // If ALL are favorites -> Turn OFF
         // Otherwise (mixed or all off) -> Turn ON
-        let allFavorites = items.allSatisfy { $0.isFavorite == true }
+        // In Folders mode, only consider editable files (non-RAW)
+        let editableItems: [FileItem]
+        if appMode == .folders {
+            editableItems = items.filter { !FileConstants.rawExtensions.contains($0.url.pathExtension.lowercased()) }
+        } else {
+            editableItems = items
+        }
+        
+        // If no editable items, do nothing (or default to false)
+        guard !editableItems.isEmpty else { return }
+        
+        let allFavorites = editableItems.allSatisfy { $0.isFavorite == true }
         let newStatus = !allFavorites
         
         // Batch update allFiles and fileItems
         var updatedItems: [FileItem] = []
         
         for item in items {
+            // In Folders mode, skip RAW files for in-memory update (they are read-only)
+            if appMode == .folders && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased()) {
+                continue
+            }
+            
             var updatedItem: FileItem?
             
             // Update allFiles
@@ -2881,15 +2986,28 @@ public class MainViewModel: ObservableObject {
                 self.applyFilter()
             }
         }
+        
+        // Persist to File Metadata (XMP/Exif)
+        // This handles non-catalog files (RGB) and updates catalog files too.
+        // writeMetadataBatch filters out RAWs internally, but we filter here too to be safe and avoid any side effects.
+        let urls = editableItems.map { $0.url }
+        Task {
+            await writeMetadataBatch(to: urls, rating: nil, label: nil, isFavorite: newStatus)
+        }
     }
     
     func setFlagStatus(for items: [FileItem], status: Int16) {
-        guard appMode == .catalog else { return }
+        // guard appMode == .catalog else { return } // Allow for non-catalog too (RGB only)
         
         // Batch update allFiles and fileItems
         var updatedItems: [FileItem] = []
         
         for item in items {
+            // In Folders mode, skip RAW files for in-memory update (they are read-only)
+            if appMode == .folders && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased()) {
+                continue
+            }
+            
             var updatedItem: FileItem?
             
             // Update allFiles
@@ -2963,6 +3081,12 @@ public class MainViewModel: ObservableObject {
             await MainActor.run {
                 self.applyFilter()
             }
+        }
+        
+        // Persist to File Metadata (XMP/Exif)
+        let urls = items.map { $0.url }
+        Task {
+            await writeMetadataBatch(to: urls, rating: nil, label: nil, flagStatus: Int(status))
         }
     }
     
@@ -3263,6 +3387,13 @@ public class MainViewModel: ObservableObject {
                         // Let's implement this Double Check in `MainViewModel`.
                         
                         if let exif = ExifReader.shared.readExifSync(from: url) {
+                            // Skip RAW files for mismatch check (User Request Round 16)
+                            // Since RAWs are read-only, catalog metadata (user edits) will naturally differ from file metadata.
+                            let ext = url.pathExtension.lowercased()
+                            if FileConstants.rawExtensions.contains(ext) {
+                                continue
+                            }
+
                             let fileRating = exif.rating ?? 0
                             let dbRating = info.rating
                             
@@ -3765,9 +3896,11 @@ public class MainViewModel: ObservableObject {
                                 // Write DB -> File
                                 let rating = Int(item.rating)
                                 let label = item.colorLabel
+                                let isFavorite = item.isFavorite
+                                let flagStatus = Int(item.flagStatus)
                                 
                                 // Write to file (non-isolated call)
-                                self.writeMetadata(to: url, rating: rating, label: label)
+                                self.writeMetadata(to: url, rating: rating, label: label, isFavorite: isFavorite, flagStatus: flagStatus)
                                 
                                 // Invalidate cache so UI updates if it re-reads
                                 ExifReader.shared.invalidateCache(for: url)
@@ -3805,7 +3938,14 @@ public class MainViewModel: ObservableObject {
         return true // Internal drive (always mounted)
     }
     
-    nonisolated private func writeMetadata(to url: URL, rating: Int, label: String?) {
+    nonisolated private func writeMetadata(to url: URL, rating: Int, label: String?, isFavorite: Bool? = nil, flagStatus: Int? = nil) {
+        // Enforce Read-Only for RAW files
+        let ext = url.pathExtension.lowercased()
+        if FileConstants.rawExtensions.contains(ext) {
+            Logger.shared.log("Skipping ExifTool write for RAW file: \(url.lastPathComponent)")
+            return
+        }
+
         // Find ExifTool
         let paths = ["/usr/local/bin/exiftool", "/opt/homebrew/bin/exiftool", "/usr/bin/exiftool"]
         var exifToolPath = "/usr/local/bin/exiftool"
@@ -3855,7 +3995,36 @@ public class MainViewModel: ObservableObject {
             args.append("-Label=")
             args.append("-XMP:Label=")
             args.append("-XMP-xmp:Label=")
+            args.append("-XMP-xmp:Label=")
             args.append("-Photoshop:Urgency=")
+        }
+        
+        // Handle Favorite
+        if let isFavorite = isFavorite {
+            if isFavorite {
+                args.append("-Subject+=Favorite")
+                args.append("-Keywords+=Favorite")
+            } else {
+                args.append("-Subject-=Favorite")
+                args.append("-Keywords-=Favorite")
+            }
+        }
+        
+        // Handle Flag
+        if let flagStatus = flagStatus {
+            // Remove old flags
+            args.append("-Subject-=Pick")
+            args.append("-Keywords-=Pick")
+            args.append("-Subject-=Reject")
+            args.append("-Keywords-=Reject")
+            
+            if flagStatus == 1 {
+                args.append("-Subject+=Pick")
+                args.append("-Keywords+=Pick")
+            } else if flagStatus == -1 {
+                args.append("-Subject+=Reject")
+                args.append("-Keywords+=Reject")
+            }
         }
         
         Logger.shared.log("ExifTool Writing to \(url.lastPathComponent): \(args)")
@@ -3880,38 +4049,70 @@ public class MainViewModel: ObservableObject {
                 Logger.shared.log("ExifTool Output: \(output)")
             }
             
-            // Sync with Finder Label
-            var labelNumber: Int?
+            // Sync with Finder Tags (Modern replacement for Label)
             if let label = label {
+                var tags: [String] = []
                 switch label.lowercased() {
-                case "red": labelNumber = 6
-                case "orange": labelNumber = 7
-                case "yellow": labelNumber = 5
-                case "green": labelNumber = 2
-                case "blue": labelNumber = 4
-                case "purple": labelNumber = 3
-                case "gray": labelNumber = 1
-                case "none", "": labelNumber = 0
-                default: labelNumber = 0
+                case "red": tags = ["Red"]
+                case "orange": tags = ["Orange"]
+                case "yellow": tags = ["Yellow"]
+                case "green": tags = ["Green"]
+                case "blue": tags = ["Blue"]
+                case "purple": tags = ["Purple"]
+                case "gray": tags = ["Gray"]
+                case "none", "": tags = []
+                default: tags = []
                 }
-            } else {
-                labelNumber = 0
+                
+                var url = url
+                try? (url as NSURL).setResourceValue(tags, forKey: .tagNamesKey)
             }
             
-            if let number = labelNumber {
-                var url = url
-                var values = URLResourceValues()
-                values.labelNumber = number
-                try? url.setResourceValues(values)
-            }
+            // Invalidate Cache
+            ExifReader.shared.invalidateCache(for: url)
             
         } catch {
             Logger.shared.log("ExifTool Failed: \(error)")
         }
     }
     
-    nonisolated private func writeMetadataBatch(to urls: [URL], rating: Int?, label: String?) {
+    nonisolated func writeMetadataBatch(to urls: [URL], rating: Int?, label: String?, isFavorite: Bool? = nil, flagStatus: Int? = nil) async {
         guard !urls.isEmpty else { return }
+        
+        // Set flag to prevent reload
+        await MainActor.run {
+            self.isUpdatingMetadata = true
+        }
+        
+        // Suspend FileSystemMonitor
+        FileSystemMonitor.shared.suspend()
+        
+        defer {
+            Task {
+                // Resume after delay to ensure we catch the event
+                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1.0s
+                FileSystemMonitor.shared.resume()
+                
+                await MainActor.run {
+                    self.isUpdatingMetadata = false
+                }
+            }
+        }
+        
+        // Filter out RAW files
+        let safeUrls = urls.filter { url in
+            let ext = url.pathExtension.lowercased()
+            if FileConstants.rawExtensions.contains(ext) {
+                Logger.shared.log("Skipping ExifTool batch write for RAW file: \(url.lastPathComponent)")
+                return false
+            }
+            return true
+        }
+        
+        guard !safeUrls.isEmpty else {
+            Logger.shared.log("No safe files to write to in batch.")
+            return
+        }
         
         // Find ExifTool
         let paths = ["/usr/local/bin/exiftool", "/opt/homebrew/bin/exiftool", "/usr/bin/exiftool"]
@@ -3966,11 +4167,39 @@ public class MainViewModel: ObservableObject {
                 args.append("-Photoshop:Urgency=")
             }
         }
+        
+        // Handle Favorite
+        if let isFavorite = isFavorite {
+            if isFavorite {
+                args.append("-Subject+=Favorite")
+                args.append("-Keywords+=Favorite")
+            } else {
+                args.append("-Subject-=Favorite")
+                args.append("-Keywords-=Favorite")
+            }
+        }
+        
+        // Handle Flag
+        if let flagStatus = flagStatus {
+            // Remove old flags
+            args.append("-Subject-=Pick")
+            args.append("-Keywords-=Pick")
+            args.append("-Subject-=Reject")
+            args.append("-Keywords-=Reject")
+            
+            if flagStatus == 1 {
+                args.append("-Subject+=Pick")
+                args.append("-Keywords+=Pick")
+            } else if flagStatus == -1 {
+                args.append("-Subject+=Reject")
+                args.append("-Keywords+=Reject")
+            }
+        }
 
         // Append all file paths
-        args.append(contentsOf: urls.map { $0.path })
+        args.append(contentsOf: safeUrls.map { $0.path })
 
-        Logger.shared.log("ExifTool Batch Writing to \(urls.count) files: \(args)")
+        Logger.shared.log("ExifTool Batch Writing to \(safeUrls.count) files: \(args)")
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: exifToolPath)
@@ -3982,27 +4211,26 @@ public class MainViewModel: ObservableObject {
             process.waitUntilExit()
             
             // Sync Finder Labels
+            // Sync Finder Tags (Only for safeUrls i.e. non-RAW)
             if let label = label {
-                var labelNumber: Int?
+                var tags: [String] = []
                 switch label.lowercased() {
-                case "red": labelNumber = 6
-                case "orange": labelNumber = 7
-                case "yellow": labelNumber = 5
-                case "green": labelNumber = 2
-                case "blue": labelNumber = 4
-                case "purple": labelNumber = 3
-                case "gray": labelNumber = 1
-                case "none", "": labelNumber = 0
-                default: labelNumber = 0
+                case "red": tags = ["Red"]
+                case "orange": tags = ["Orange"]
+                case "yellow": tags = ["Yellow"]
+                case "green": tags = ["Green"]
+                case "blue": tags = ["Blue"]
+                case "purple": tags = ["Purple"]
+                case "gray": tags = ["Gray"]
+                case "none", "": tags = []
+                default: tags = []
                 }
                 
-                if let number = labelNumber {
-                    for var url in urls {
-                        var values = URLResourceValues()
-                        values.labelNumber = number
-                        try? url.setResourceValues(values)
-                    }
-                }
+            }
+            
+            // Invalidate Cache for ALL safe files, not just if label changed
+            for url in safeUrls {
+                ExifReader.shared.invalidateCache(for: url)
             }
             
         } catch {

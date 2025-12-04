@@ -2,7 +2,7 @@ import SwiftUI
 
 public struct MainWindow: View {
     @StateObject private var viewModel = MainViewModel()
-    @State private var gridWidth: CGFloat = 600 // Default grid width
+
     
     public init() {}
     
@@ -124,23 +124,16 @@ public struct MainWindow: View {
     @ViewBuilder
     private var detailContent: some View {
         HStack(spacing: 0) {
-            GridView(viewModel: viewModel)
-                .frame(minWidth: 400)
-                .frame(width: viewModel.isPreviewVisible ? gridWidth : nil)
-                .frame(maxWidth: viewModel.isPreviewVisible ? gridWidth : .infinity)
-                .layoutPriority(viewModel.isPreviewVisible ? 0 : 1)
-            
-            if viewModel.isPreviewVisible {
-                DraggableSplitter(
-                    width: $gridWidth,
-                    isLeft: true,
-                    minWidth: 400,
-                    maxAllowedWidth: 800 // Fixed large value to prevent jitter from dynamic calculation
-                )
+            HSplitView {
+                GridView(viewModel: viewModel)
+                    .frame(minWidth: 400)
+                    .frame(maxWidth: .infinity)
                 
-                DetailView(viewModel: viewModel)
-                    .frame(minWidth: 100)
-                    .layoutPriority(1)
+                if viewModel.isPreviewVisible {
+                    DetailView(viewModel: viewModel)
+                        .frame(minWidth: 100)
+                        .frame(maxWidth: .infinity)
+                }
             }
             
             if viewModel.isInspectorVisible {
@@ -314,57 +307,4 @@ struct MainWindowAlerts: ViewModifier {
     }
 }
 
-struct DraggableSplitter: View {
-    @Binding var width: CGFloat
-    var isLeft: Bool = false // If true, resizing affects left pane width
-    var minWidth: CGFloat = 100
-    var maxAllowedWidth: CGFloat = 2000
-    
-    @State private var initialWidth: CGFloat?
-    
-    var body: some View {
-        Rectangle()
-            .fill(Color(nsColor: .separatorColor))
-            .frame(width: 1)
-            .overlay(
-                Rectangle()
-                    .fill(Color.clear)
-                    .frame(width: 10) // Hit area
-            )
-            .zIndex(1) // Ensure it's above other content
-            .onHover { inside in
-                if inside {
-                    NSCursor.resizeLeftRight.set()
-                } else {
-                    NSCursor.arrow.set()
-                }
-            }
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        if initialWidth == nil {
-                            initialWidth = width
-                        }
-                        
-                        guard let startWidth = initialWidth else { return }
-                        
-                        if isLeft {
-                            let newWidth = startWidth + value.translation.width
-                            // Clamp
-                             if newWidth >= minWidth && newWidth <= maxAllowedWidth {
-                                width = newWidth
-                            }
-                        } else {
-                            let newWidth = startWidth - value.translation.width
-                            // Clamp
-                             if newWidth >= minWidth && newWidth <= maxAllowedWidth {
-                                width = newWidth
-                            }
-                        }
-                    }
-                    .onEnded { _ in
-                        initialWidth = nil
-                    }
-            )
-    }
-}
+

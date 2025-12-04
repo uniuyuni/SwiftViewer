@@ -47,7 +47,7 @@ struct FilterCriteria: Codable {
     
     var isActive: Bool {
         minRating > 0 || colorLabel != nil || !showImages || !showVideos || !searchText.isEmpty ||
-        !selectedCameras.isEmpty || !selectedLenses.isEmpty || !selectedISOs.isEmpty ||
+        !selectedMakers.isEmpty || !selectedCameras.isEmpty || !selectedLenses.isEmpty || !selectedISOs.isEmpty ||
         !selectedDates.isEmpty || !selectedFileTypes.isEmpty || !selectedShutterSpeeds.isEmpty ||
         !selectedApertures.isEmpty || !selectedFocalLengths.isEmpty ||
         showOnlyFavorites || flagFilter != .all

@@ -9,6 +9,21 @@ class FileSystemMonitor {
     
     private init() {}
     
+    private var isSuspended: Bool = false
+    private let lock = NSLock()
+    
+    func suspend() {
+        lock.lock()
+        isSuspended = true
+        lock.unlock()
+    }
+    
+    func resume() {
+        lock.lock()
+        isSuspended = false
+        lock.unlock()
+    }
+    
     func startMonitoring(url: URL, onChange: @escaping () -> Void) {
         stopMonitoring()
         
@@ -21,7 +36,17 @@ class FileSystemMonitor {
         
         monitorSource = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fileDescriptor, eventMask: [.write, .delete, .rename, .extend, .attrib], queue: DispatchQueue.global())
         
-        monitorSource?.setEventHandler {
+        monitorSource?.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            
+            self.lock.lock()
+            if self.isSuspended {
+                self.lock.unlock()
+                Logger.shared.log("FileSystemMonitor: Change detected but suspended. Ignoring.")
+                return
+            }
+            self.lock.unlock()
+            
             let event = self.monitorSource?.data
             Logger.shared.log("FileSystemMonitor: Change detected in \(url.path). Event: \(event?.rawValue ?? 0)")
             onChange()
