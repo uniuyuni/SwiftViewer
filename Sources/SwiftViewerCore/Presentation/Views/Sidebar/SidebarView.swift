@@ -209,6 +209,9 @@ struct CatalogSection: View {
                     Button("Update Catalog") {
                         viewModel.triggerCatalogUpdateCheck(for: catalog)
                     }
+                    Button("Optimize Catalog") {
+                        viewModel.optimizeCatalog()
+                    }
                 }
                 
                 Section("Folders") {

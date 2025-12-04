@@ -2512,6 +2512,11 @@ public class MainViewModel: ObservableObject {
             
             // Delete items
             let context = persistenceController.container.viewContext
+            
+            // Cancel generation first
+            let objectIDs = items.map { $0.objectID }
+            ThumbnailGenerationService.shared.cancelGeneration(for: objectIDs)
+            
             for item in items {
                 // Remove thumbnail
                 let uuid = item.id ?? UUID()
@@ -3710,6 +3715,24 @@ public class MainViewModel: ObservableObject {
             await MainActor.run {
                 self.updateStats = stats
                 self.showUpdateConfirmation = true
+            }
+        }
+    }
+    
+    func optimizeCatalog() {
+        guard let catalog = currentCatalog else { return }
+        
+        Task.detached(priority: .utility) {
+            let context = PersistenceController.shared.newBackgroundContext()
+            await context.perform {
+                let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
+                request.predicate = NSPredicate(format: "catalog == %@", catalog.objectID)
+                request.propertiesToFetch = ["id"]
+                
+                if let items = try? context.fetch(request) {
+                    let validUUIDs = Set(items.compactMap { $0.id })
+                    ThumbnailCacheService.shared.cleanupOrphanedThumbnails(validUUIDs: validUUIDs)
+                }
             }
         }
     }

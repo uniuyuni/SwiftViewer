@@ -84,4 +84,32 @@ class ThumbnailCacheService {
         try? FileManager.default.removeItem(at: thumbUrl)
         try? FileManager.default.removeItem(at: previewUrl)
     }
+    
+    func cleanupOrphanedThumbnails(validUUIDs: Set<UUID>) {
+        guard let enumerator = FileManager.default.enumerator(at: cacheDirectory, includingPropertiesForKeys: nil) else { return }
+        
+        var deletedCount = 0
+        let validStrings = Set(validUUIDs.map { $0.uuidString })
+        
+        for case let fileURL as URL in enumerator {
+            guard fileURL.pathExtension == "jpg" else { continue }
+            
+            let filename = fileURL.deletingPathExtension().lastPathComponent
+            // Filename format: UUID.jpg or UUID_preview.jpg
+            let uuidString = filename.replacingOccurrences(of: "_preview", with: "")
+            
+            if !validStrings.contains(uuidString) {
+                do {
+                    try FileManager.default.removeItem(at: fileURL)
+                    deletedCount += 1
+                    // Also remove from memory cache if present
+                    memoryCache.removeObject(forKey: uuidString as NSString)
+                } catch {
+                    print("Failed to delete orphaned thumbnail: \(fileURL.lastPathComponent)")
+                }
+            }
+        }
+        
+        print("Cleanup: Removed \(deletedCount) orphaned thumbnail files.")
+    }
 }
