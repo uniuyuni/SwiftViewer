@@ -9,7 +9,10 @@ public struct FileItem: Identifiable, Hashable, Sendable {
     }
     public let url: URL
     public let isDirectory: Bool
-    public let name: String
+    public var name: String {
+        return displayName ?? url.lastPathComponent
+    }
+    public let displayName: String?
     public let isAvailable: Bool
     public var isConflict: Bool = false
     public var uuid: UUID? // For Catalog items to access persistent cache
@@ -23,10 +26,10 @@ public struct FileItem: Identifiable, Hashable, Sendable {
     public let orientation: Int?
     public var rating: Int? // 0-5
     
-    public init(url: URL, isDirectory: Bool, isAvailable: Bool = true, uuid: UUID? = nil, colorLabel: String? = nil, isFavorite: Bool? = nil, flagStatus: Int16? = nil, fileCount: Int? = nil, creationDate: Date? = nil, modificationDate: Date? = nil, fileSize: Int64? = nil, orientation: Int? = nil, rating: Int? = nil) {
+    public init(url: URL, isDirectory: Bool, displayName: String? = nil, isAvailable: Bool = true, uuid: UUID? = nil, colorLabel: String? = nil, isFavorite: Bool? = nil, flagStatus: Int16? = nil, fileCount: Int? = nil, creationDate: Date? = nil, modificationDate: Date? = nil, fileSize: Int64? = nil, orientation: Int? = nil, rating: Int? = nil) {
         self.url = url
         self.isDirectory = isDirectory
-        self.name = url.lastPathComponent
+        self.displayName = displayName
         self.isAvailable = isAvailable
         self.uuid = uuid
         self.colorLabel = colorLabel

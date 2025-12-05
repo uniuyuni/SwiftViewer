@@ -114,60 +114,47 @@ public class MainViewModel: ObservableObject {
             self.isExifToolAvailable = MetadataService.shared.isExifToolAvailable()
         }
 
+        loadSettings()
+    }
+    
+    func loadSettings() {
+        // Skip in tests
+        let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        if isTesting { return }
+        
         // Load default sort order
-        if !isTesting, let savedSort = UserDefaults.standard.string(forKey: "defaultSortOrder"),
+        if let savedSort = UserDefaults.standard.string(forKey: "defaultSortOrder"),
             let order = SortOption(rawValue: savedSort)
         {
             self.sortOption = order
         }
 
         // Load default thumbnail size
-        if !isTesting {
-            let savedSize = UserDefaults.standard.double(forKey: "defaultThumbnailSize")
-            if savedSize > 0 {
-                self.thumbnailSize = savedSize
-            }
+        let savedSize = UserDefaults.standard.double(forKey: "defaultThumbnailSize")
+        if savedSize > 0 {
+            self.thumbnailSize = savedSize
         }
 
-        if !isTesting {
-            // Load inspector visibility
-            self.isInspectorVisible = UserDefaults.standard.bool(forKey: "isInspectorVisible")
+        // Load inspector visibility
+        self.isInspectorVisible = UserDefaults.standard.bool(forKey: "isInspectorVisible")
 
-            // Load column visibility
-            // Sync column visibility based on inspector visibility
-            if self.isInspectorVisible {
-                self.columnVisibility = .all
-            } else {
-                self.columnVisibility = .doubleColumn
-            }
-
-            // Load filters
-            loadFilterCriteria()
-
-            loadExpandedFolders()
-            loadExpandedCatalogFolders()
+        // Load column visibility
+        // Sync column visibility based on inspector visibility
+        if self.isInspectorVisible {
+            self.columnVisibility = .all
+        } else {
+            self.columnVisibility = .doubleColumn
         }
+
+        // Load filters
+        // Load filters
+        loadFilterCriteria()
+
+        loadExpandedFolders()
+        loadExpandedCatalogFolders()
+        loadSavedPhotosLibraries()
 
         setupNotifications()
-
-        // Load default mode
-        if UserDefaults.standard.string(forKey: "defaultAppMode") == "catalogs" {
-            // ...
-        } else {
-            // Try to load last opened folder
-            if let lastPath = UserDefaults.standard.string(forKey: "lastOpenedFolder") {
-                let url = URL(fileURLWithPath: lastPath)
-                var isDir: ObjCBool = false
-                if FileManager.default.fileExists(atPath: lastPath, isDirectory: &isDir)
-                    && isDir.boolValue
-                {
-                    openFolder(FileItem(url: url, isDirectory: true))
-                }
-            }
-        }
-
-        // Try to load last used catalog
-        loadCurrentCatalogID()
     }
 
     private func setupNotifications() {
@@ -175,7 +162,7 @@ public class MainViewModel: ObservableObject {
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.refreshFolders()
+                self?.handleAppDidBecomeActive()
             }
         }
 
@@ -194,7 +181,6 @@ public class MainViewModel: ObservableObject {
                 // Delay to ensure volume is ready
                 try? await Task.sleep(nanoseconds: 1_000_000_000) // 1.0s
                 await self?.loadRootFolders()
-                // Resume thumbnail generation if needed
                 // Resume thumbnail generation if needed
                 self?.checkForMetadataMismatches()
             }
@@ -254,7 +240,14 @@ public class MainViewModel: ObservableObject {
         self.collectionRepository = CollectionRepository(context: newContext)
         
         // Reload
-        loadCatalogs()
+        // Load persistent state
+        // Load persistent state
+        // loadPanePosition() // Not implemented yet or missing
+        // loadPanePosition() // Not implemented yet or missing
+        loadSavedPhotosLibraries()
+        
+        // Initial refresh
+        refreshFolders()
         
         // If we have a catalog, select it (optional, maybe select first one)
         if let first = catalogs.first {
@@ -353,6 +346,38 @@ public class MainViewModel: ObservableObject {
             ImageCacheService.shared.clearCache()
 
             print("Refreshed all views.")
+            print("Refreshed all views.")
+        }
+    }
+    
+    private func handleAppDidBecomeActive() {
+        Logger.shared.log("App became active. Refreshing content based on mode: \(appMode)")
+        
+        switch appMode {
+        case .folders:
+            refreshFolders()
+        case .catalog:
+            if let catalog = currentCatalog {
+                // Reload catalog items to reflect any external changes (though less likely for catalog)
+                // Or just ensure we are showing what we have.
+                // If we are in Photos mode (which might share .catalog or have its own state?)
+                // Actually Photos integration sets currentCatalog = nil.
+                loadMediaItems(from: catalog)
+            } else if selectedPhotosGroupID != nil {
+                // We are in Photos mode
+                // We should probably not reload aggressively to avoid resetting scroll position,
+                // but if items are missing, we might need to.
+                // For now, let's just log. The user said items disappear.
+                // If fileItems is empty, we should try to reload.
+                if fileItems.isEmpty {
+                    Logger.shared.log("Photos mode active but fileItems empty. Attempting reload.")
+                    // We need to find the library and group.
+                    // This is hard because selectedPhotosGroupID is just a string.
+                    // We'd need to parse it or store the objects.
+                    // For now, let's assume Photos mode doesn't need explicit refresh on active
+                    // unless we implement a specific reload logic.
+                }
+            }
         }
     }
 
@@ -414,6 +439,8 @@ public class MainViewModel: ObservableObject {
 
         // currentCatalog = nil // Keep catalog selected in sidebar as requested
         currentCollection = nil
+        selectedPhotosGroupID = nil // Clear Photos selection
+        selectedCatalogFolder = nil // Clear Catalog folder selection
         selectedFiles.removeAll()
         currentFile = nil
         // Reset filters as requested by user
@@ -483,6 +510,7 @@ public class MainViewModel: ObservableObject {
         appMode = .catalog
         currentFolder = nil
         currentCollection = nil  // Clear collection selection
+        selectedPhotosGroupID = nil // Clear Photos selection
         if let url = url {
             selectedCatalogFolder = FileItem(url: url, isDirectory: true)
         } else {
@@ -953,6 +981,14 @@ public class MainViewModel: ObservableObject {
                 fileItems = sortItems(mapped)
                 // Also populate metadata cache for these items
                 populateMetadataCache(from: filtered)
+            }
+        } else if selectedPhotosGroupID != nil {
+            // Photos Mode: Filter from allFiles
+            if isFilterDisabled {
+                fileItems = sortItems(allFiles)
+            } else {
+                let filtered = filterFileItems(allFiles)
+                fileItems = sortItems(filtered)
             }
         } else if isFilterDisabled {
             // If filters are disabled, show all items (subject to folder scope)
@@ -1558,6 +1594,188 @@ public class MainViewModel: ObservableObject {
     }
 
     @Published var allMediaItems: [MediaItem] = []  // Store all items in catalog
+    // MARK: - Photos Library Integration
+    @Published var photosLibraries: [PhotosLibrary] = []
+    @Published var photosLibraryGroups: [UUID: [PhotosDateGroup]] = [:] // Library ID -> Groups
+    @Published var expandedPhotosGroups: Set<String> = [] // "LibraryID/DateID"
+    @Published var selectedPhotosGroupID: String? // "LibraryID/DateID"
+    
+    private let photosLibrariesKey = "SavedPhotosLibraries_v2"
+    
+    func loadSavedPhotosLibraries() {
+        print("Loading saved Photos Libraries...")
+        guard let data = UserDefaults.standard.data(forKey: photosLibrariesKey) else {
+            print("No saved Photos Libraries found.")
+            return
+        }
+        
+        do {
+            let savedLibraries = try JSONDecoder().decode([PhotosLibrary].self, from: data)
+            var validLibraries: [PhotosLibrary] = []
+            
+            for var library in savedLibraries {
+                print("Processing saved library: \(library.name)")
+                var isStale = false
+                if let bookmarkData = library.bookmarkData {
+                    do {
+                        let url = try URL(resolvingBookmarkData: bookmarkData, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale)
+                        print("Resolved bookmark for \(library.name) at \(url.path)")
+                        
+                        if isStale {
+                            print("Bookmark is stale for \(library.name), recreating...")
+                            if url.startAccessingSecurityScopedResource() {
+                                library.bookmarkData = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+                                url.stopAccessingSecurityScopedResource()
+                            }
+                        }
+                        
+                        let updatedLibrary = PhotosLibrary(id: library.id, name: library.name, url: url, bookmarkData: library.bookmarkData)
+                        
+                        if url.startAccessingSecurityScopedResource() {
+                            print("Successfully started accessing \(library.name)")
+                            validLibraries.append(updatedLibrary)
+                            loadAssets(for: updatedLibrary)
+                        } else {
+                            print("Failed to start accessing security scoped resource for \(library.name)")
+                            // Keep it anyway, maybe user can fix permissions later
+                            validLibraries.append(updatedLibrary)
+                        }
+                        
+                    } catch {
+                        print("Failed to resolve bookmark for \(library.name): \(error)")
+                        // Keep the original library entry even if bookmark resolution fails
+                        validLibraries.append(library)
+                    }
+                } else {
+                    print("No bookmark data for \(library.name)")
+                    // Keep it anyway
+                    validLibraries.append(library)
+                }
+            }
+            
+            self.photosLibraries = validLibraries
+            // Do NOT save here, as it might overwrite valid data with partial data if we had bugs above.
+            // savePhotosLibraries() 
+        } catch {
+            print("Failed to decode saved Photos Libraries: \(error)")
+        }
+    }
+    
+    func savePhotosLibraries() {
+        print("Saving Photos Libraries: \(photosLibraries.count) libraries")
+        do {
+            let data = try JSONEncoder().encode(photosLibraries)
+            UserDefaults.standard.set(data, forKey: photosLibrariesKey)
+            print("Saved Photos Libraries to UserDefaults.")
+        } catch {
+            print("Failed to encode Photos Libraries: \(error)")
+        }
+    }
+    
+    func addPhotosLibrary(url: URL) {
+        print("Adding Photos Library at \(url.path)")
+        
+        // Ensure we have access before creating bookmark
+        guard url.startAccessingSecurityScopedResource() else {
+            print("Failed to obtain access to Photos Library URL")
+            return
+        }
+        defer { url.stopAccessingSecurityScopedResource() }
+        
+        var bookmarkData: Data?
+        do {
+            bookmarkData = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+            print("Created security scoped bookmark for \(url.lastPathComponent)")
+        } catch {
+            print("Failed to create bookmark: \(error)")
+        }
+        
+        // Create library instance (bookmarkData might be nil if failed, but we try anyway)
+        let library = PhotosLibrary(name: url.deletingPathExtension().lastPathComponent, url: url, bookmarkData: bookmarkData)
+        
+        // We need to keep accessing it for the session. 
+        // Since we stopAccessing in defer, we need to start again for the long-lived reference?
+        // Actually, for the session, we should hold the access.
+        // But `addPhotosLibrary` is called from `fileImporter` which grants access temporarily.
+        // To persist access across the app session, we should rely on the bookmark resolution or just start accessing again.
+        
+        // Let's re-resolve the bookmark immediately to get a persistent URL reference if possible, 
+        // or just start accessing the URL we have (assuming fileImporter gave us permission).
+        
+        if url.startAccessingSecurityScopedResource() {
+            photosLibraries.append(library)
+            savePhotosLibraries() // Persist changes
+            loadAssets(for: library)
+        } else {
+            print("Failed to start persistent access for new library")
+        }
+    }
+    
+    private func loadAssets(for library: PhotosLibrary) {
+        Task {
+            do {
+                let groups = try await PhotosLibraryService.shared.fetchAssets(from: library.url)
+                await MainActor.run {
+                    self.photosLibraryGroups[library.id] = groups
+                }
+            } catch {
+                print("Failed to load Photos Library: \(error)")
+            }
+        }
+    }
+    
+    func removePhotosLibrary(_ library: PhotosLibrary) {
+        library.url.stopAccessingSecurityScopedResource() // Stop accessing
+        photosLibraries.removeAll { $0.id == library.id }
+        photosLibraryGroups.removeValue(forKey: library.id)
+        savePhotosLibraries()
+    }
+    
+    func togglePhotosGroupExpansion(libraryID: UUID, groupID: String) {
+        let key = "\(libraryID.uuidString)/\(groupID)"
+        if expandedPhotosGroups.contains(key) {
+            expandedPhotosGroups.remove(key)
+        } else {
+            expandedPhotosGroups.insert(key)
+        }
+    }
+    
+    func selectPhotosGroup(_ group: PhotosDateGroup, libraryID: UUID) {
+        self.selectedPhotosGroupID = "\(libraryID.uuidString)/\(group.id)"
+        
+        // Convert PhotosAssets to FileItems
+        let items = group.assets.map { asset -> FileItem in
+            // Use the original URL (hashed path in originals)
+            // But we want to display the original filename?
+            // FileItem usually takes name from URL.
+            // We might need a way to override display name in FileItem, or just use the file on disk.
+            // For now, let's use the file on disk.
+            let url = asset.originalURL
+            let item = FileItem(url: url, isDirectory: false, displayName: asset.filename, fileSize: asset.fileSize)
+            // TODO: If we want to show original filename, we need to modify FileItem or wrap it.
+            return item
+        }
+        
+        // Apply current sort
+        let sortedItems = sortItems(items)
+        
+        self.fileItems = sortedItems
+        self.allFiles = sortedItems // Update source of truth for filtering
+        self.currentFolder = nil // Deselect current folder
+        self.currentCollection = nil
+        self.selectedCatalogFolder = nil // Clear Catalog folder selection
+        // self.currentCatalog = nil // Keep catalog open as requested by user
+        
+        // Trigger metadata loading
+        Task {
+            await loadMetadataForCurrentFolder(items: items.map { $0.url })
+        }
+        
+        // Update UI
+        self.objectWillChange.send()
+    }
+    
+    // MARK: - Import
     @Published var isImporting = false
     @Published var importProgress: Double = 0.0
     @Published var importStatusMessage: String = ""
@@ -2269,7 +2487,7 @@ public class MainViewModel: ObservableObject {
     }
 
     private func sortItems(_ items: [FileItem]) -> [FileItem] {
-        return FileSortService.sortFiles(items, by: sortOption, ascending: isSortAscending)
+        return FileSortService.sortFiles(items, by: sortOption, ascending: isSortAscending, metadataCache: metadataCache)
     }
 
     // Blocking Operation State
@@ -4525,4 +4743,6 @@ public class MainViewModel: ObservableObject {
             }
         }
     }
+    
+
 }

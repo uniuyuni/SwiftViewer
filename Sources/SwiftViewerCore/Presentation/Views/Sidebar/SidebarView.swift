@@ -255,6 +255,100 @@ struct CatalogSection: View {
     }
 }
 
+struct PhotosLibrarySection: View {
+    @ObservedObject var viewModel: MainViewModel
+    @State private var showFileImporter = false
+    
+    var body: some View {
+        Section(header: HStack {
+            Text("Photos Libraries")
+            Spacer()
+            Button {
+                showFileImporter = true
+            } label: {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(.plain)
+        }) {
+            ForEach(viewModel.photosLibraries) { library in
+                PhotosLibraryNodeView(library: library, viewModel: viewModel)
+            }
+        }
+        .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.package], allowsMultipleSelection: false) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    // Request access to the folder
+                    guard url.startAccessingSecurityScopedResource() else { return }
+                    viewModel.addPhotosLibrary(url: url)
+                    // Note: We should stop accessing when done, but for a long-lived library reference, 
+                    // we might need to persist bookmark data. For now, we keep it simple.
+                }
+            case .failure(let error):
+                print("Failed to select Photos Library: \(error)")
+            }
+        }
+    }
+}
+
+struct PhotosLibraryNodeView: View {
+    let library: PhotosLibrary
+    @ObservedObject var viewModel: MainViewModel
+    
+    var body: some View {
+        DisclosureGroup(
+            content: {
+                if let groups = viewModel.photosLibraryGroups[library.id] {
+                    ForEach(groups) { group in
+                        PhotosDateGroupNodeView(library: library, group: group, viewModel: viewModel)
+                    }
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(.leading)
+                }
+            },
+            label: {
+                HStack {
+                    Image(systemName: "photo.on.rectangle")
+                    Text(library.name)
+                }
+                .contextMenu {
+                    Button("Remove Library") {
+                        viewModel.removePhotosLibrary(library)
+                    }
+                }
+            }
+        )
+    }
+}
+
+struct PhotosDateGroupNodeView: View {
+    let library: PhotosLibrary
+    let group: PhotosDateGroup
+    @ObservedObject var viewModel: MainViewModel
+    
+    var body: some View {
+        HStack {
+            Image(systemName: "folder")
+            Text(group.id) // YYYY-MM-DD
+            Spacer()
+            Text("\(group.assets.count)")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+        }
+        .padding(.leading, 12)
+        .background(
+            viewModel.selectedPhotosGroupID == "\(library.id.uuidString)/\(group.id)" ? Color.accentColor.opacity(0.2) : Color.clear
+        )
+        .cornerRadius(4)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            viewModel.selectPhotosGroup(group, libraryID: library.id)
+        }
+    }
+}
+
 struct LocationsSection: View {
     @ObservedObject var viewModel: MainViewModel
     @Binding var folderToRename: URL?
@@ -438,6 +532,8 @@ struct SidebarListView: View {
             }
             
             CatalogSection(viewModel: viewModel, showCatalogManager: $showCatalogManager, folderToRename: $folderToRename, newFolderName: $newFolderName, showRenameAlert: $showRenameAlert, showCatalogRenameAlert: $showCatalogRenameAlert, catalogToRename: $catalogToRename, newCatalogName: $newCatalogName)
+            
+            PhotosLibrarySection(viewModel: viewModel)
             
             LocationsSection(viewModel: viewModel, folderToRename: $folderToRename, newFolderName: $newFolderName, showRenameAlert: $showRenameAlert)
         }
