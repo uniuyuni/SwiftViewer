@@ -63,23 +63,22 @@ public struct MainWindow: View {
     @ViewBuilder
     private var mainContent: some View {
         ZStack {
-            NavigationSplitView(columnVisibility: $viewModel.columnVisibility) {
-                SidebarView(viewModel: viewModel)
-                    .navigationSplitViewColumnWidth(min: 150, ideal: 200, max: 400)
-            } detail: {
-                detailContent
+            contentView
+            
+            if viewModel.isBlockingOperation {
+                BlockingOperationView(
+                    message: viewModel.blockingOperationMessage,
+                    progress: viewModel.blockingOperationProgress
+                )
+                .zIndex(100) // Ensure it's on top
             }
-            .frame(minWidth: 900, minHeight: 600) // Reduced minWidth
-            .onChange(of: viewModel.currentFolder) { _, newFolder in
-                if let folder = newFolder {
-                    viewModel.openFolder(folder)
-                }
-            }
-            .onChange(of: viewModel.currentCatalog) { _, newCatalog in
-                if let catalog = newCatalog {
-                    viewModel.openCatalog(catalog)
-                }
-            }
+        }
+    }
+
+    private var contentView: some View {
+        splitView
+            .modifier(MainViewModifiers(viewModel: viewModel))
+            .frame(minWidth: 900, minHeight: 600)
             .background {
                 hiddenControls
             }
@@ -93,14 +92,13 @@ public struct MainWindow: View {
                         Label("Preview", systemImage: "eye")
                     }
                 }
-                
+            }
+            .toolbar {
                 ToolbarItemGroup {
                     Slider(value: $viewModel.thumbnailSize, in: 50...300)
                         .frame(width: 100)
                 }
             }
-            .onChange(of: viewModel.filterCriteria.minRating) { _, _ in viewModel.applyFilter() }
-            .onChange(of: viewModel.filterCriteria.colorLabel) { _, _ in viewModel.applyFilter() }
             .focusedSceneValue(\.toggleInspector) {
                 withAnimation {
                     viewModel.toggleInspector()
@@ -110,17 +108,20 @@ public struct MainWindow: View {
                 viewModel.triggerCatalogUpdateCheck()
             }
             .modifier(MainWindowAlerts(viewModel: viewModel))
-            
-            if viewModel.isBlockingOperation {
-                BlockingOperationView(
-                    message: viewModel.blockingOperationMessage,
-                    progress: viewModel.blockingOperationProgress
-                )
-                .zIndex(100) // Ensure it's on top
-            }
+    }
+
+
+    
+
+    private var splitView: some View {
+        NavigationSplitView(columnVisibility: $viewModel.columnVisibility) {
+            SidebarView(viewModel: viewModel)
+                .navigationSplitViewColumnWidth(min: 150, ideal: 200, max: 400)
+        } detail: {
+            detailContent
         }
     }
-    
+
     @ViewBuilder
     private var detailContent: some View {
         HStack(spacing: 0) {
@@ -176,7 +177,6 @@ public struct MainWindow: View {
             viewModel.refreshAll()
         }
         .keyboardShortcut("r", modifiers: .command)
-        .hidden()
         
         Button("") { viewModel.selectNext() }
             .keyboardShortcut(.rightArrow, modifiers: [])
@@ -196,48 +196,72 @@ public struct MainWindow: View {
         
         // Favorite and Flag shortcuts (Catalog only)
         Button("Toggle Favorite") {
-            if viewModel.appMode == .catalog {
-                let items = viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)
-                if !items.isEmpty {
-                    viewModel.toggleFavorite(for: items)
-                }
+            let items = viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)
+            if !items.isEmpty {
+                viewModel.toggleFavorite(for: items)
             }
         }
         .keyboardShortcut("l", modifiers: [])
         .hidden()
         
         Button("Set Pick Flag") {
-            if viewModel.appMode == .catalog {
-                let items = viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)
-                if !items.isEmpty {
-                    viewModel.setFlagStatus(for: items, status: 1)
-                }
+            let items = viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)
+            if !items.isEmpty {
+                viewModel.setFlagStatus(for: items, status: 1)
             }
         }
         .keyboardShortcut("a", modifiers: [])
         .hidden()
         
         Button("Set Reject Flag") {
-            if viewModel.appMode == .catalog {
-                let items = viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)
-                if !items.isEmpty {
-                    viewModel.setFlagStatus(for: items, status: -1)
-                }
+            let items = viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)
+            if !items.isEmpty {
+                viewModel.setFlagStatus(for: items, status: -1)
             }
         }
         .keyboardShortcut("x", modifiers: [])
         .hidden()
         
         Button("Unflag") {
-            if viewModel.appMode == .catalog {
-                let items = viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)
-                if !items.isEmpty {
-                    viewModel.setFlagStatus(for: items, status: 0)
-                }
+            let items = viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)
+            if !items.isEmpty {
+                viewModel.setFlagStatus(for: items, status: 0)
+            }
+        }
+        
+        Button("Unflag") {
+            let items = viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)
+            if !items.isEmpty {
+                viewModel.setFlagStatus(for: items, status: 0)
             }
         }
         .keyboardShortcut("u", modifiers: [])
         .hidden()
+        
+        // Rating Shortcuts
+        Button("Set Rating 0") { viewModel.setRating(0, for: viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)) }
+            .keyboardShortcut("0", modifiers: [])
+            .hidden()
+        
+        Button("Set Rating 1") { viewModel.setRating(1, for: viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)) }
+            .keyboardShortcut("1", modifiers: [])
+            .hidden()
+            
+        Button("Set Rating 2") { viewModel.setRating(2, for: viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)) }
+            .keyboardShortcut("2", modifiers: [])
+            .hidden()
+            
+        Button("Set Rating 3") { viewModel.setRating(3, for: viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)) }
+            .keyboardShortcut("3", modifiers: [])
+            .hidden()
+            
+        Button("Set Rating 4") { viewModel.setRating(4, for: viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)) }
+            .keyboardShortcut("4", modifiers: [])
+            .hidden()
+            
+        Button("Set Rating 5") { viewModel.setRating(5, for: viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)) }
+            .keyboardShortcut("5", modifiers: [])
+            .hidden()
     }
 }
 
@@ -305,4 +329,25 @@ struct MainWindowAlerts: ViewModifier {
     }
 }
 
+
+
+struct MainViewModifiers: ViewModifier {
+    @ObservedObject var viewModel: MainViewModel
+    
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: viewModel.currentFolder) { _, newFolder in
+                if let folder = newFolder {
+                    viewModel.openFolder(folder)
+                }
+            }
+            .onChange(of: viewModel.currentCatalog) { _, newCatalog in
+                if let catalog = newCatalog {
+                    viewModel.openCatalog(catalog)
+                }
+            }
+            .onChange(of: viewModel.filterCriteria.minRating) { _, _ in viewModel.applyFilter() }
+            .onChange(of: viewModel.filterCriteria.colorLabel) { _, _ in viewModel.applyFilter() }
+    }
+}
 

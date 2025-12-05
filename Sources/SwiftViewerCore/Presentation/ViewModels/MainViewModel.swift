@@ -1654,6 +1654,7 @@ public class MainViewModel: ObservableObject {
             }
             
             self.photosLibraries = validLibraries
+            self.objectWillChange.send() // Force UI update
             // Do NOT save here, as it might overwrite valid data with partial data if we had bugs above.
             // savePhotosLibraries() 
         } catch {

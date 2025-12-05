@@ -56,11 +56,11 @@ struct FolderNodeView: View {
                 return NSItemProvider(object: folder.url as NSURL)
             }
             .onTapGesture {
-                viewModel.currentFolder = folder
+                viewModel.openFolder(folder)
             }
             .padding(.vertical, 4)
             .padding(.horizontal, 4)
-            .background(viewModel.currentFolder?.url == folder.url ? Color.accentColor : Color.clear)
+            .background(viewModel.currentFolder?.url == folder.url && viewModel.appMode == .folders ? Color.accentColor : Color.clear)
             .foregroundStyle(viewModel.currentFolder?.url == folder.url ? .white : .primary)
             .cornerRadius(6)
             .onDrop(of: [.fileURL], delegate: FolderDropDelegate(targetFolder: folder, viewModel: viewModel))

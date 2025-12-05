@@ -27,7 +27,8 @@ final class IntegrationTests: XCTestCase {
     func testCatalogToFoldersModeSwitch() async throws {
         // 1. Create test files
         let jpgURL = tempDir.appendingPathComponent("test.jpg")
-        try "dummy".write(to: jpgURL, atomically: true, encoding: .utf8)
+        let jpgData = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x01, 0x00, 0x48, 0x00, 0x48, 0x00, 0x00, 0xFF, 0xDB])
+        try jpgData.write(to: jpgURL)
         
         let canonicalURL = try FileManager.default.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil).first { $0.lastPathComponent == "test.jpg" }!
         
@@ -70,7 +71,8 @@ final class IntegrationTests: XCTestCase {
     func testFoldersToCatalogModeSwitch() async throws {
         // 1. Create test files
         let jpgURL = tempDir.appendingPathComponent("test.jpg")
-        try "dummy".write(to: jpgURL, atomically: true, encoding: .utf8)
+        let jpgData = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x01, 0x00, 0x48, 0x00, 0x48, 0x00, 0x00, 0xFF, 0xDB])
+        try jpgData.write(to: jpgURL)
         
         // 2. Start in Folders mode
         viewModel.appMode = .folders
@@ -219,8 +221,10 @@ final class IntegrationTests: XCTestCase {
         
         let fileA = folderA.appendingPathComponent("test.jpg")
         let fileB = folderB.appendingPathComponent("test.jpg")
-        try "dummy".write(to: fileA, atomically: true, encoding: .utf8)
-        try "dummy".write(to: fileB, atomically: true, encoding: .utf8)
+        // Create valid minimal JPG
+        let jpgData = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x01, 0x00, 0x48, 0x00, 0x48, 0x00, 0x00, 0xFF, 0xDB])
+        try jpgData.write(to: fileA)
+        try jpgData.write(to: fileB)
         
         viewModel.appMode = .folders
         

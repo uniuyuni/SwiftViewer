@@ -27,7 +27,7 @@ public struct FileItem: Identifiable, Hashable, Sendable {
     public var rating: Int? // 0-5
     
     public init(url: URL, isDirectory: Bool, displayName: String? = nil, isAvailable: Bool = true, uuid: UUID? = nil, colorLabel: String? = nil, isFavorite: Bool? = nil, flagStatus: Int16? = nil, fileCount: Int? = nil, creationDate: Date? = nil, modificationDate: Date? = nil, fileSize: Int64? = nil, orientation: Int? = nil, rating: Int? = nil) {
-        self.url = url
+        self.url = url.standardizedFileURL
         self.isDirectory = isDirectory
         self.displayName = displayName
         self.isAvailable = isAvailable
@@ -60,8 +60,17 @@ public struct FileItem: Identifiable, Hashable, Sendable {
     }
     
     public func hash(into hasher: inout Hasher) {
-        // Hash only identity for performance in Sets/Dictionaries where stability matters
-        // But for SwiftUI List, it uses Identifiable.id
+        // Hash all fields to match == implementation and ensure Hashable correctness
         hasher.combine(id)
+        hasher.combine(colorLabel)
+        hasher.combine(isFavorite)
+        hasher.combine(flagStatus)
+        hasher.combine(modificationDate)
+        hasher.combine(isAvailable)
+        hasher.combine(fileCount)
+        hasher.combine(rating)
+        hasher.combine(fileSize)
+        hasher.combine(creationDate)
+        hasher.combine(orientation)
     }
 }

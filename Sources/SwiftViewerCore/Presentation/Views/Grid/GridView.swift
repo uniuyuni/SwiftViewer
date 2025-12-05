@@ -6,49 +6,9 @@ struct GridView: View {
     
     var body: some View {
         GeometryReader { geo in
-            let spacing: CGFloat = 10
-            let minSize = viewModel.thumbnailSize
-            // Round width to nearest 10 pixels to prevent micro-changes
-            let roundedWidth = (geo.size.width / 10).rounded() * 10
-            let availableWidth = max(0, roundedWidth - 32)
-            let columnsCount = max(1, Int((availableWidth + spacing) / (minSize + spacing)))
-            
-            VStack(spacing: 0) {
-                FilterBarView(viewModel: viewModel)
-                
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        if viewModel.fileItems.isEmpty {
-                            emptyStateView(viewModel: viewModel)
-                        } else {
-                            gridContent(columnsCount: columnsCount, proxy: proxy)
-                        }
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .frame(minWidth: 400)
-            .background(Color(nsColor: .windowBackgroundColor))
-            .onChange(of: geo.size.width) { _, width in
-                let spacing: CGFloat = 10
-                let minSize = viewModel.thumbnailSize
-                let availableWidth = max(0, width - 32)
-                let cols = max(1, Int((availableWidth + spacing) / (minSize + spacing)))
-                
-                // Only update if column count actually changes (debounce)
-                if viewModel.gridColumnsCount != cols {
-                    viewModel.gridColumnsCount = cols
-                }
-            }
-            .onAppear {
-                // Initial calculation
-                let spacing: CGFloat = 10
-                let minSize = viewModel.thumbnailSize
-                let availableWidth = max(0, geo.size.width - 32)
-                let cols = max(1, Int((availableWidth + spacing) / (minSize + spacing)))
-                viewModel.gridColumnsCount = cols
-            }
+            GridViewContent(viewModel: viewModel, size: geo.size)
         }
+        .frame(minWidth: 400) // Applied to GeometryReader to ensure minimum size
         // Keyboard handling at root level
         .background(
             Button("") {
@@ -78,13 +38,8 @@ struct GridView: View {
             .keyboardShortcut(.rightArrow, modifiers: [])
             .hidden()
         )
-        .refreshableCommand {
-            Task {
-                await viewModel.refreshFileAttributes()
-            }
-        }
         .navigationTitle(title)
-        .searchable(text: $viewModel.filterCriteria.searchText, placement: .toolbar, prompt: "Search")
+        .searchable(text: $viewModel.filterCriteria.searchText, placement: .automatic, prompt: "Search")
         .toolbar {
             toolbarContent
         }
@@ -124,6 +79,74 @@ struct GridView: View {
         return "SwiftViewer"
     }
     
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Menu {
+                Picker("Sort By", selection: $viewModel.sortOption) {
+                    ForEach(MainViewModel.SortOption.allCases, id: \.self) { option in
+                        Text(option.rawValue).tag(option)
+                    }
+                }
+                .pickerStyle(.inline)
+                
+                Divider()
+                
+                Button(action: { viewModel.isSortAscending.toggle() }) {
+                    Label(viewModel.isSortAscending ? "Ascending" : "Descending", systemImage: viewModel.isSortAscending ? "arrow.up" : "arrow.down")
+                }
+            } label: {
+                Label("Sort", systemImage: "arrow.up.arrow.down")
+            }
+        }
+    }
+
+}
+
+struct GridViewContent: View {
+    @ObservedObject var viewModel: MainViewModel
+    let size: CGSize
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            FilterBarView(viewModel: viewModel)
+            
+            ScrollViewReader { proxy in
+                ScrollView {
+                    if viewModel.fileItems.isEmpty {
+                        emptyStateView(viewModel: viewModel)
+                    } else {
+                        // Use viewModel.gridColumnsCount for dynamic updates
+                        gridContent(columnsCount: max(1, viewModel.gridColumnsCount), proxy: proxy)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(minWidth: 400, idealWidth: 600) // Enforce minimum width with ideal size
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onChange(of: size.width) { _, width in
+            let spacing: CGFloat = 10
+            let minSize = viewModel.thumbnailSize
+            // Increase padding subtraction to account for scrollbar (approx 16px) + padding (32px) -> ~48px
+            let availableWidth = max(0, width - 48)
+            let cols = max(1, Int((availableWidth + spacing) / (minSize + spacing)))
+            
+            // Only update if column count actually changes (debounce)
+            if viewModel.gridColumnsCount != cols {
+                viewModel.gridColumnsCount = cols
+            }
+        }
+        .onAppear {
+            // Initial calculation
+            let spacing: CGFloat = 10
+            let minSize = viewModel.thumbnailSize
+            let availableWidth = max(0, size.width - 48)
+            let cols = max(1, Int((availableWidth + spacing) / (minSize + spacing)))
+            viewModel.gridColumnsCount = cols
+        }
+    }
+    
     @ViewBuilder
     private func gridContent(columnsCount: Int, proxy: ScrollViewProxy) -> some View {
         let spacing: CGFloat = 10
@@ -157,29 +180,6 @@ struct GridView: View {
         }
     }
     
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            Menu {
-                Picker("Sort By", selection: $viewModel.sortOption) {
-                    ForEach(MainViewModel.SortOption.allCases, id: \.self) { option in
-                        Text(option.rawValue).tag(option)
-                    }
-                }
-                .pickerStyle(.inline)
-                
-                Divider()
-                
-                Button(action: { viewModel.isSortAscending.toggle() }) {
-                    Label(viewModel.isSortAscending ? "Ascending" : "Descending", systemImage: viewModel.isSortAscending ? "arrow.up" : "arrow.down")
-                }
-            } label: {
-                Label("Sort", systemImage: "arrow.up.arrow.down")
-            }
-        }
-    }
-
-    
     @ViewBuilder
     @MainActor
     private func emptyStateView(viewModel: MainViewModel) -> some View {
@@ -207,7 +207,6 @@ struct GridView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
-
 }
 
 struct GridItemWrapper: View {
@@ -238,35 +237,8 @@ struct GridItemWrapper: View {
                 }
             }
             
-            Menu("Rating") {
-                Button("0 Stars") { viewModel.updateRating(for: targetItems, rating: 0) }
-                Button("1 Star") { viewModel.updateRating(for: targetItems, rating: 1) }
-                Button("2 Stars") { viewModel.updateRating(for: targetItems, rating: 2) }
-                Button("3 Stars") { viewModel.updateRating(for: targetItems, rating: 3) }
-                Button("4 Stars") { viewModel.updateRating(for: targetItems, rating: 4) }
-                Button("5 Stars") { viewModel.updateRating(for: targetItems, rating: 5) }
-            }
-            
-            Menu("Color Label") {
-                Button("None") { viewModel.updateColorLabel(for: targetItems, label: nil) }
-                Button("Red") { viewModel.updateColorLabel(for: targetItems, label: "Red") }
-                Button("Orange") { viewModel.updateColorLabel(for: targetItems, label: "Orange") }
-                Button("Yellow") { viewModel.updateColorLabel(for: targetItems, label: "Yellow") }
-                Button("Green") { viewModel.updateColorLabel(for: targetItems, label: "Green") }
-                Button("Blue") { viewModel.updateColorLabel(for: targetItems, label: "Blue") }
-                Button("Purple") { viewModel.updateColorLabel(for: targetItems, label: "Purple") }
-                Button("Gray") { viewModel.updateColorLabel(for: targetItems, label: "Gray") }
-            }
-            
-            Button(viewModel.selectedFiles.first?.isFavorite == true ? "Unfavorite" : "Favorite") {
-                viewModel.toggleFavorite(for: targetItems)
-            }
-            
-            Menu("Flag") {
-                Button("Flagged") { viewModel.setFlagStatus(for: targetItems, status: 1) }
-                Button("Unflagged") { viewModel.setFlagStatus(for: targetItems, status: 0) }
-                Button("Rejected") { viewModel.setFlagStatus(for: targetItems, status: -1) }
-            }
+            // Metadata editing removed from context menu by user request
+            // Use Inspector or Keyboard Shortcuts instead
             
             Divider()
             
@@ -303,89 +275,107 @@ struct GridItemView: View {
             .frame(width: viewModel.thumbnailSize, height: viewModel.thumbnailSize)
             .clipped()
             .overlay {
-                ZStack(alignment: .bottomTrailing) {
-                    // Selection Indicator
-                    if viewModel.selectedFiles.contains(item) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.white, .blue)
-                            .padding(4)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                    }
+                GridItemOverlay(item: item, viewModel: viewModel)
+            }
+            .contentShape(Rectangle()) // Ensure tap area covers the whole item
+            .onTapGesture {
+                let modifiers = NSEvent.modifierFlags
+                if modifiers.contains(.command) {
+                    viewModel.toggleSelection(item)
+                } else if modifiers.contains(.shift) {
+                    viewModel.selectRange(to: item)
+                } else {
+                    viewModel.selectFile(item, autoScroll: false)
+                }
+            }
+    }
+    
+    private func colorFromName(_ name: String) -> Color? {
+        switch name.lowercased() {
+        case "red": return .red
+        case "orange": return .orange
+        case "yellow": return .yellow
+        case "green": return .green
+        case "blue": return .blue
+        case "purple": return .purple
+        case "gray": return .gray
+        default: return nil
+    }
+}
+}
+
+struct GridItemOverlay: View {
+    let item: FileItem
+    @ObservedObject var viewModel: MainViewModel
+    
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            // Selection Indicator
+            if viewModel.selectedFiles.contains(item) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.white, .blue)
+                    .padding(4)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            }
+            
+            // Color Label & Flag Indicator
+            if let colorName = viewModel.metadataCache[item.url.standardizedFileURL]?.colorLabel ?? item.colorLabel, let color = colorFromName(colorName) {
+                HStack(spacing: 2) {
+                    Circle()
+                        .fill(color)
+                        .frame(width: 8, height: 8)
+                        .background(Circle().fill(.white).frame(width: 10, height: 10))
                     
-                    // Color Label Indicator
-                    if let colorName = viewModel.metadataCache[item.url]?.colorLabel ?? item.colorLabel, let color = colorFromName(colorName) {
-                        HStack(spacing: 2) {
-                            Circle()
-                                .fill(color)
-                                .frame(width: 8, height: 8)
-                                .background(Circle().fill(.white).frame(width: 10, height: 10))
-                            
-                            // Flag Indicator (next to color label)
-                            if let flagStatus = Optional(viewModel.metadataCache[item.url]?.flagStatus ?? Int(item.flagStatus ?? 0)), flagStatus != 0 {
-                                Image(systemName: flagStatus == 1 ? "flag.fill" : "flag.slash.fill")
-                                    .font(.system(size: 7))
-                                    .foregroundStyle(flagStatus == 1 ? .green : .red)
-                            }
-                        }
-                        .padding(3)
-                        .offset(x: -3, y: -3)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    } else if let flagStatus = Optional(viewModel.metadataCache[item.url]?.flagStatus ?? Int(item.flagStatus ?? 0)), flagStatus != 0 {
-                        // Flag Indicator only (no color label)
+                    // Flag Indicator (next to color label)
+                    if let flagStatus = Optional(viewModel.metadataCache[item.url.standardizedFileURL]?.flagStatus ?? Int(item.flagStatus ?? 0)), flagStatus != 0 {
                         Image(systemName: flagStatus == 1 ? "flag.fill" : "flag.slash.fill")
                             .font(.system(size: 7))
                             .foregroundStyle(flagStatus == 1 ? .green : .red)
-                            .padding(3)
-                            // Removed white background circle
-                            .offset(x: -3, y: -3)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    }
+                }
+                .padding(3)
+                .offset(x: -3, y: -3)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else if let flagStatus = Optional(viewModel.metadataCache[item.url.standardizedFileURL]?.flagStatus ?? Int(item.flagStatus ?? 0)), flagStatus != 0 {
+                // Flag Indicator only (no color label)
+                Image(systemName: flagStatus == 1 ? "flag.fill" : "flag.slash.fill")
+                    .font(.system(size: 7))
+                    .foregroundStyle(flagStatus == 1 ? .green : .red)
+                    .padding(3)
+                    .offset(x: -3, y: -3)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+            
+            // Rating and Favorite Indicator
+            if let rating = viewModel.metadataCache[item.url.standardizedFileURL]?.rating ?? item.rating, rating > 0 {
+                HStack(spacing: 2) {
+                    ForEach(0..<rating, id: \.self) { _ in
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 7))
+                            .foregroundStyle(.yellow)
                     }
                     
-                    // Rating and Favorite Indicator
-                    if let rating = viewModel.metadataCache[item.url]?.rating, rating > 0 {
-                        HStack(spacing: 2) {
-                            ForEach(0..<rating, id: \.self) { _ in
-                                Image(systemName: "star.fill")
-                                    .font(.system(size: 7))
-                                    .foregroundStyle(.yellow)
-                            }
-                            
-                            // Favorite Indicator (next to rating)
-                            if let isFavorite = viewModel.metadataCache[item.url]?.isFavorite ?? item.isFavorite, isFavorite {
-                                Image(systemName: "heart.fill")
-                                    .font(.system(size: 7))
-                                    .foregroundStyle(.pink)
-                            }
-                        }
-                        .padding(3)
-                        // Removed black background
-                        .offset(x: -3, y: 3) // Adjusted to align with top-left
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                    } else if let isFavorite = viewModel.metadataCache[item.url]?.isFavorite ?? item.isFavorite, isFavorite {
-                        // Favorite Indicator only (no rating)
+                    // Favorite Indicator (next to rating)
+                    if let isFavorite = viewModel.metadataCache[item.url.standardizedFileURL]?.isFavorite ?? item.isFavorite, isFavorite {
                         Image(systemName: "heart.fill")
                             .font(.system(size: 7))
                             .foregroundStyle(.pink)
-                            .padding(3)
-                            // Removed black background
-                            .offset(x: -3, y: 3)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        .contentShape(Rectangle()) // Ensure tap area covers the whole item
-        .contentShape(Rectangle()) // Ensure tap area covers the whole item
-        .onTapGesture {
-            let modifiers = NSEvent.modifierFlags
-            if modifiers.contains(.command) {
-                viewModel.toggleSelection(item)
-            } else if modifiers.contains(.shift) {
-                viewModel.selectRange(to: item)
-            } else {
-                viewModel.selectFile(item, autoScroll: false)
+                .padding(3)
+                .offset(x: -3, y: 3)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            } else if let isFavorite = viewModel.metadataCache[item.url.standardizedFileURL]?.isFavorite ?? item.isFavorite, isFavorite {
+                // Favorite Indicator only (no rating)
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 7))
+                    .foregroundStyle(.pink)
+                    .padding(3)
+                    .offset(x: -3, y: 3)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
     private func colorFromName(_ name: String) -> Color? {

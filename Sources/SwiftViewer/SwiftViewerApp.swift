@@ -14,6 +14,7 @@ struct SwiftViewerApp: App {
         WindowGroup(id: "main") {
             MainWindow()
         }
+        .windowResizability(.contentMinSize)
         .commands {
             SidebarCommands() // Enables View -> Toggle Sidebar
             

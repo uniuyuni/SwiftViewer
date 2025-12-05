@@ -32,9 +32,6 @@ struct SidebarView: View {
                 catalogToRename: $catalogToRename,
                 newCatalogName: $newCatalogName
             )
-            .refreshableCommand {
-                refresh()
-            }
             .safeAreaInset(edge: .bottom) {
                 thumbnailStatusView
             }
@@ -154,26 +151,9 @@ struct SidebarView: View {
 }
 
 // Helper to add keyboard shortcut
-struct RefreshCommandModifier: ViewModifier {
-    let action: () -> Void
-    
-    func body(content: Content) -> some View {
-        content
-            .background(
-                Button("Refresh") {
-                    action()
-                }
-                .keyboardShortcut("r", modifiers: .command)
-                .opacity(0)
-            )
-    }
-}
 
-extension View {
-    func refreshableCommand(action: @escaping () -> Void) -> some View {
-        self.modifier(RefreshCommandModifier(action: action))
-    }
-}
+
+
 
 struct CatalogSection: View {
     @ObservedObject var viewModel: MainViewModel
@@ -328,6 +308,10 @@ struct PhotosDateGroupNodeView: View {
     let group: PhotosDateGroup
     @ObservedObject var viewModel: MainViewModel
     
+    var isSelected: Bool {
+        viewModel.selectedPhotosGroupID == "\(library.id.uuidString)/\(group.id)" && viewModel.currentCollection == nil
+    }
+    
     var body: some View {
         HStack {
             Image(systemName: "folder")
@@ -338,13 +322,16 @@ struct PhotosDateGroupNodeView: View {
                 .font(.caption)
         }
         .padding(.leading, 12)
-        .background(
-            viewModel.selectedPhotosGroupID == "\(library.id.uuidString)/\(group.id)" ? Color.accentColor.opacity(0.2) : Color.clear
-        )
-        .cornerRadius(4)
+        .padding(.vertical, 4)
+        .padding(.horizontal, 4)
+        .background(isSelected ? Color.accentColor : Color.clear)
+        .foregroundStyle(isSelected ? .white : .primary)
+        .cornerRadius(6)
         .contentShape(Rectangle())
         .onTapGesture {
-            viewModel.selectPhotosGroup(group, libraryID: library.id)
+            Task {
+                await viewModel.selectPhotosGroup(group, libraryID: library.id)
+            }
         }
     }
 }
@@ -398,15 +385,15 @@ struct CatalogFolderNodeView: View {
     @Binding var showRenameAlert: Bool
     @State private var showRemoveConfirmation = false
     
-    var isSelected: Bool {
-        viewModel.selectedCatalogFolder?.url == node.url
-    }
-    
     var isExpanded: Binding<Bool> {
         Binding(
             get: { viewModel.expandedCatalogFolders.contains(node.url.path) },
             set: { _ in viewModel.toggleCatalogExpansion(for: node.url) }
         )
+    }
+    
+    var isSelected: Bool {
+        viewModel.selectedCatalogFolder?.url == node.url && viewModel.currentCollection == nil
     }
     
     var body: some View {
@@ -434,12 +421,12 @@ struct CatalogFolderNodeView: View {
             Spacer()
         }
         .contentShape(Rectangle())
+        .onTapGesture {
+            viewModel.selectCatalogFolder(node.url)
+        }
         .onDrag {
             DragState.shared.startDrag(url: node.url)
             return NSItemProvider(object: node.url as NSURL)
-        }
-        .onTapGesture {
-            viewModel.selectCatalogFolder(node.url)
         }
         .padding(.vertical, 4)
         .padding(.horizontal, 4)
@@ -484,11 +471,19 @@ struct CollectionsSectionView: View {
     var body: some View {
         Section("Collections") {
             ForEach(viewModel.collections) { collection in
+                let isSelected = viewModel.currentCollection?.id == collection.id
                 Button {
                     viewModel.openCollection(collection)
                 } label: {
                     Label(collection.name ?? "Untitled", systemImage: "rectangle.stack")
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(isSelected ? Color.accentColor : Color.clear)
+                        .foregroundStyle(isSelected ? .white : .primary)
+                        .cornerRadius(6)
                 }
+                .buttonStyle(.plain)
                 .contextMenu {
                     Button("Rename") {
                         collectionToRename = collection

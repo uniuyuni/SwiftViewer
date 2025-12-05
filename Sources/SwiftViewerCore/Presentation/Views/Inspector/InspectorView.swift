@@ -1,13 +1,13 @@
-import SwiftUI
 import CoreData
+import SwiftUI
 
 struct InspectorView: View {
     @ObservedObject var viewModel: MainViewModel
-    
+
     init(viewModel: MainViewModel) {
         self.viewModel = viewModel
     }
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Inspector")
@@ -15,14 +15,16 @@ struct InspectorView: View {
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color(nsColor: .windowBackgroundColor))
-            
+
             Divider()
-            
+
             ScrollView(.vertical) {
                 let selection = Array(viewModel.selectedFiles)
                 if selection.count > 1 {
                     multiSelectionView(selection: selection)
-                } else if let item = viewModel.currentFile ?? selection.first, let exif = viewModel.metadataCache[item.url] {
+                } else if let item = viewModel.currentFile ?? selection.first,
+                    let exif = viewModel.metadataCache[item.url.standardizedFileURL]
+                {
                     singleSelectionView(item: item, exif: exif)
                         .id(item.id)
                 } else {
@@ -41,80 +43,84 @@ struct InspectorView: View {
             alignment: .leading
         )
     }
-    
+
     private var editableSelection: [FileItem] {
         let selection = Array(viewModel.selectedFiles)
-        if viewModel.appMode == .catalog {
-            return selection
-        } else {
-            // In Folders mode, only include non-RAW files for common state calculation
-            return selection.filter { !isRAW($0) }
-        }
+        // Always filter out RAW files for metadata display/editing logic
+        return selection.filter { !isRAW($0) }
     }
+
+
 
     private var commonRating: Int {
         let selection = editableSelection
         guard !selection.isEmpty else { return 0 }
-        
-        let firstRating = viewModel.metadataCache[selection.first!.url]?.rating ?? 0
-        let allSame = selection.allSatisfy { (viewModel.metadataCache[$0.url]?.rating ?? 0) == firstRating }
+
+        let firstRating = viewModel.metadataCache[selection.first!.url.standardizedFileURL]?.rating ?? selection.first?.rating ?? 0
+        let allSame = selection.allSatisfy {
+            (viewModel.metadataCache[$0.url.standardizedFileURL]?.rating ?? $0.rating ?? 0) == firstRating
+        }
         return allSame ? Int(firstRating) : 0
     }
-    
+
     private var commonLabel: String? {
         let selection = editableSelection
         guard !selection.isEmpty else { return nil }
-        
+
         // Use metadata cache if available
-        let firstLabel = viewModel.metadataCache[selection.first!.url]?.colorLabel ?? selection.first?.colorLabel
+        let firstLabel =
+            viewModel.metadataCache[selection.first!.url.standardizedFileURL]?.colorLabel ?? selection.first?.colorLabel
         let allSame = selection.allSatisfy { item in
-            let label = viewModel.metadataCache[item.url]?.colorLabel ?? item.colorLabel
+            let label = viewModel.metadataCache[item.url.standardizedFileURL]?.colorLabel ?? item.colorLabel
             return label == firstLabel
         }
         return allSame ? firstLabel : nil
     }
-    
+
     private var commonFavorite: Bool? {
         let selection = editableSelection
         guard !selection.isEmpty else { return nil }
-        
+
         // Use metadata cache if available
-        let firstFav = viewModel.metadataCache[selection.first!.url]?.isFavorite ?? selection.first?.isFavorite
+        let firstFav =
+            viewModel.metadataCache[selection.first!.url.standardizedFileURL]?.isFavorite ?? selection.first?.isFavorite
         let allSame = selection.allSatisfy { item in
-            let fav = viewModel.metadataCache[item.url]?.isFavorite ?? item.isFavorite
+            let fav = viewModel.metadataCache[item.url.standardizedFileURL]?.isFavorite ?? item.isFavorite
             return fav == firstFav
         }
         return allSame ? firstFav : nil
     }
-    
+
     private var commonFlag: Int? {
         let selection = editableSelection
         guard !selection.isEmpty else { return nil }
-        
+
         // Use metadata cache if available
-        let firstFlag = viewModel.metadataCache[selection.first!.url]?.flagStatus ?? Int(selection.first?.flagStatus ?? 0)
+        let firstFlag =
+            viewModel.metadataCache[selection.first!.url.standardizedFileURL]?.flagStatus
+            ?? Int(selection.first?.flagStatus ?? 0)
         let allSame = selection.allSatisfy { item in
-            let flag = viewModel.metadataCache[item.url]?.flagStatus ?? Int(item.flagStatus ?? 0)
+            let flag = viewModel.metadataCache[item.url.standardizedFileURL]?.flagStatus ?? Int(item.flagStatus ?? 0)
             return flag == firstFlag
         }
         return allSame ? firstFlag : nil
     }
-    
+
     private func multiSelectionView(selection: [FileItem]) -> some View {
         // Check if at least one item is editable
         let anyEditable = selection.contains { !isRAW($0) }
-        
+
         return VStack(alignment: .leading, spacing: 16) {
             Text("Multiple items selected")
                 .font(.headline)
             Text("\(selection.count) items")
                 .foregroundStyle(.secondary)
-            
+
             Divider()
-            
+
             // Editable Metadata (Batch)
             Text("Metadata (Batch)").font(.subheadline).bold()
-            
+
             // Rating
             HStack {
                 Text("Rating")
@@ -125,7 +131,7 @@ struct InspectorView: View {
                 .opacity(anyEditable ? 1.0 : 0.5)
                 .disabled(!anyEditable)
             }
-            
+
             // Favorite (Available in both modes, read-only for RAW in Folders)
             // if viewModel.appMode == .catalog { // Removed to allow RGB editing in Folders
             if true {
@@ -140,7 +146,7 @@ struct InspectorView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                
+
                 // Flag
                 HStack {
                     Text("Flag")
@@ -153,7 +159,7 @@ struct InspectorView: View {
                                 .foregroundStyle(commonFlag == 1 ? Color.green : Color.gray)
                         }
                         .buttonStyle(.plain)
-                        
+
                         Button(action: {
                             viewModel.setFlagStatus(for: selection, status: -1)
                         }) {
@@ -161,18 +167,19 @@ struct InspectorView: View {
                                 .foregroundStyle(commonFlag == -1 ? Color.red : Color.gray)
                         }
                         .buttonStyle(.plain)
-                        
+
                         Button(action: {
                             viewModel.setFlagStatus(for: selection, status: 0)
                         }) {
                             Image(systemName: "xmark.circle")
-                                .foregroundStyle(commonFlag == 0 ? Color(nsColor: .labelColor) : Color.gray)
+                                .foregroundStyle(
+                                    commonFlag == 0 ? Color(nsColor: .labelColor) : Color.gray)
                         }
                         .buttonStyle(.plain)
                     }
                 }
             }
-            
+
             // Color Label
             HStack {
                 Text("Label")
@@ -183,7 +190,7 @@ struct InspectorView: View {
                 .opacity(anyEditable ? 1.0 : 0.5)
                 .disabled(!anyEditable)
             }
-            
+
             if !anyEditable {
                 Text("Editing disabled for RAW files.")
                     .font(.caption)
@@ -192,7 +199,15 @@ struct InspectorView: View {
         }
         .padding()
     }
-    
+
+    private func isEditable(_ item: FileItem) -> Bool {
+        if isRAW(item) {
+            // RAW files are editable ONLY in Catalog mode AND NOT in Photos mode
+            return viewModel.appMode == .catalog && viewModel.selectedPhotosGroupID == nil
+        }
+        return true
+    }
+
     private func singleSelectionView(item: FileItem, exif: ExifMetadata) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             // Basic Info
@@ -219,9 +234,9 @@ struct InspectorView: View {
                     }
                 }
             }
-            
+
             Divider()
-            
+
             // Camera Info
             Group {
                 Text("Camera").font(.subheadline).bold()
@@ -256,9 +271,9 @@ struct InspectorView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            
+
             Divider()
-            
+
             // Shooting Info
             Group {
                 Text("Shooting").font(.subheadline).bold()
@@ -329,9 +344,9 @@ struct InspectorView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            
+
             Divider()
-            
+
             // Description Info
             Group {
                 Text("Description").font(.subheadline).bold()
@@ -351,9 +366,9 @@ struct InspectorView: View {
                         .multilineTextAlignment(.trailing)
                 }
             }
-            
+
             Divider()
-            
+
             // Location Info
             Group {
                 Text("Location").font(.subheadline).bold()
@@ -382,13 +397,13 @@ struct InspectorView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            
+
             Divider()
-            
+
             // Editable Metadata
             Group {
                 Text("Metadata").font(.subheadline).bold()
-                
+
                 // Rating
                 HStack {
                     Text("Rating")
@@ -396,11 +411,10 @@ struct InspectorView: View {
                     RatingView(rating: Int(exif.rating ?? 0)) { newRating in
                         viewModel.updateRating(for: item, rating: newRating)
                     }
-                    // Enable if NOT RAW OR (Is RAW AND In Catalog)
-                    .opacity((!isRAW(item) || viewModel.appMode == .catalog) ? 1.0 : 0.5)
-                    .disabled(isRAW(item) && viewModel.appMode != .catalog)
+                    .opacity(isEditable(item) ? 1.0 : 0.5)
+                    .disabled(!isEditable(item))
                 }
-                
+
                 // Favorite
                 HStack {
                     Text("Favorite")
@@ -408,70 +422,81 @@ struct InspectorView: View {
                     Button(action: {
                         viewModel.toggleFavorite(for: [item])
                     }) {
-                        let isFav = viewModel.metadataCache[item.url]?.isFavorite ?? item.isFavorite
+                        let isFav = viewModel.metadataCache[item.url.standardizedFileURL]?.isFavorite ?? item.isFavorite
                         Image(systemName: isFav == true ? "heart.fill" : "heart")
                             .foregroundStyle(isFav == true ? .pink : .gray)
                     }
                     .buttonStyle(.plain)
                 }
-                .opacity((!isRAW(item) || viewModel.appMode == .catalog) ? 1.0 : 0.5)
-                .disabled(isRAW(item) && viewModel.appMode != .catalog)
-                
+                .opacity(isEditable(item) ? 1.0 : 0.5)
+                .disabled(!isEditable(item))
+
                 // Flag
                 HStack {
                     Text("Flag")
                     Spacer()
                     HStack(spacing: 8) {
-                        let flagStatus = viewModel.metadataCache[item.url]?.flagStatus ?? Int(item.flagStatus ?? 0)
-                        
+                        let flagStatus =
+                            viewModel.metadataCache[item.url.standardizedFileURL]?.flagStatus
+                            ?? Int(item.flagStatus ?? 0)
+
                         Button(action: {
                             viewModel.setFlagStatus(for: [item], status: 1)
                         }) {
                             Image(systemName: "flag.fill")
-                                .foregroundStyle(flagStatus == 1 ? Color.green : Color.gray)
+                            .foregroundStyle(flagStatus == 1 ? Color.green : Color.gray)
                         }
                         .buttonStyle(.plain)
-                        
+
                         Button(action: {
                             viewModel.setFlagStatus(for: [item], status: -1)
                         }) {
                             Image(systemName: "flag.slash.fill")
-                                .foregroundStyle(flagStatus == -1 ? Color.red : Color.gray)
+                            .foregroundStyle(flagStatus == -1 ? Color.red : Color.gray)
                         }
                         .buttonStyle(.plain)
-                        
+
                         Button(action: {
                             viewModel.setFlagStatus(for: [item], status: 0)
                         }) {
                             Image(systemName: "xmark.circle")
-                                .foregroundStyle(flagStatus == 0 ? Color(nsColor: .labelColor) : Color.gray)
+                                .foregroundStyle(
+                                    flagStatus == 0 ? Color(nsColor: .labelColor) : Color.gray)
                         }
                         .buttonStyle(.plain)
                     }
                 }
-                .opacity((!isRAW(item) || viewModel.appMode == .catalog) ? 1.0 : 0.5)
-                .disabled(isRAW(item) && viewModel.appMode != .catalog)
-                
+                .opacity(isEditable(item) ? 1.0 : 0.5)
+                .disabled(!isEditable(item))
+
                 // Color Label
                 HStack {
                     Text("Label")
                     Spacer()
-                    let label = viewModel.metadataCache[item.url]?.colorLabel ?? item.colorLabel
-                    ColorLabelPicker(selection: label) { newLabel in
-                        viewModel.updateColorLabel(for: item, label: newLabel)
+                    ColorLabelPicker(selection: viewModel.metadataCache[item.url.standardizedFileURL]?.colorLabel ?? item.colorLabel) { newLabel in
+                        viewModel.updateColorLabel(for: [item], label: newLabel)
                     }
-                    // Enable if NOT RAW OR (Is RAW AND In Catalog)
-                    .opacity((!isRAW(item) || viewModel.appMode == .catalog) ? 1.0 : 0.5)
-                    .disabled(isRAW(item) && viewModel.appMode != .catalog)
+                    .opacity(isEditable(item) ? 1.0 : 0.5)
+                    .disabled(!isEditable(item))
                 }
                 
+                if !isEditable(item) {
+                    Text("Editing disabled for RAW files.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 // Debug Info
                 Divider()
                 Group {
                     Text("Debug Info").font(.caption).bold()
                     Text("Ext: \(item.url.pathExtension)")
-                    Text("Is RAW: \(FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased()) ? "Yes" : "No")")
-                    Text("Is Catalog: \(viewModel.appMode == .catalog || viewModel.currentCatalog != nil ? "Yes" : "No")")
+                    Text(
+                        "Is RAW: \(FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased()) ? "Yes" : "No")"
+                    )
+                    Text(
+                        "Is Catalog: \(viewModel.appMode == .catalog || viewModel.currentCatalog != nil ? "Yes" : "No")"
+                    )
                     Text("Disabled: \(isRAW(item) && viewModel.appMode != .catalog ? "Yes" : "No")")
                     Text("ExifTool: \(viewModel.isExifToolAvailable ? "Available" : "Not Found")")
                 }
@@ -481,23 +506,29 @@ struct InspectorView: View {
         }
         .padding()
     }
-    
+
     private func isRAW(_ item: FileItem) -> Bool {
-        return FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased())
+        let urlExt = item.url.standardizedFileURL.pathExtension.lowercased()
+        if !urlExt.isEmpty {
+            return FileConstants.rawExtensions.contains(urlExt)
+        }
+        // Fallback to name if URL has no extension (e.g. Photos asset)
+        let nameExt = (item.name as NSString).pathExtension.lowercased()
+        return FileConstants.rawExtensions.contains(nameExt)
     }
 }
 
 struct RatingView: View {
     let rating: Int
     let onTap: (Int) -> Void
-    
+
     var body: some View {
         HStack(spacing: 2) {
             ForEach(1...5, id: \.self) { index in
                 Image(systemName: index <= rating ? "star.fill" : "star")
                     .foregroundStyle(index <= rating ? .yellow : .gray)
                     .onTapGesture {
-                        onTap(index == rating ? 0 : index) // Toggle off if same
+                        onTap(index == rating ? 0 : index)  // Toggle off if same
                     }
             }
         }
@@ -507,20 +538,20 @@ struct RatingView: View {
 struct ColorLabelPicker: View {
     let selection: String?
     let onTap: (String?) -> Void
-    
+
     let colors = ["Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Gray"]
-    
+
     var body: some View {
         HStack(spacing: 4) {
             // None
             Image(systemName: "circle.slash")
                 .font(.system(size: 16))
                 .foregroundColor(selection == nil ? .primary : .secondary)
-                .onTapGesture { 
+                .onTapGesture {
                     Logger.shared.log("InspectorView: ColorLabelPicker cleared.")
-                    onTap(nil) 
+                    onTap(nil)
                 }
-            
+
             ForEach(colors, id: \.self) { colorName in
                 Circle()
                     .fill(colorFromString(colorName))
@@ -531,13 +562,15 @@ struct ColorLabelPicker: View {
                     )
                     .onTapGesture {
                         let newLabel = selection == colorName ? nil : colorName
-                        Logger.shared.log("InspectorView: ColorLabelPicker tapped \(colorName). New label: \(newLabel ?? "nil")")
+                        Logger.shared.log(
+                            "InspectorView: ColorLabelPicker tapped \(colorName). New label: \(newLabel ?? "nil")"
+                        )
                         onTap(newLabel)
                     }
             }
         }
     }
-    
+
     private func colorFromString(_ name: String) -> Color {
         switch name {
         case "Red": return .red

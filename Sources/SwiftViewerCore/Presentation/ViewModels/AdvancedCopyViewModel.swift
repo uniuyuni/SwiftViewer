@@ -200,10 +200,11 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
                 }
             }
 
+            let idsToDeselect = toDeselect // Capture as immutable
             await MainActor.run {
-                self.selectedFileIDs.subtract(toDeselect)
+                self.selectedFileIDs.subtract(idsToDeselect)
                 self.isLoading = false
-                self.statusMessage = "Deselected \(toDeselect.count) existing files."
+                self.statusMessage = "Deselected \(idsToDeselect.count) existing files."
             }
         }
     }
@@ -214,7 +215,11 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
 
     @Published var organizeByDate: Bool = true
     @Published var splitEvents: Bool = false
-    @Published var eventSplitGap: Int = 30  // Minutes
+    @Published var eventSplitGap: Int = UserDefaults.standard.integer(forKey: "advancedCopyEventSplitGap") == 0 ? 30 : UserDefaults.standard.integer(forKey: "advancedCopyEventSplitGap") {
+        didSet {
+            UserDefaults.standard.set(eventSplitGap, forKey: "advancedCopyEventSplitGap")
+        }
+    }
     @Published var dateFormat: String = "yyyy-MM-dd"
 
     // Copy Progress
@@ -669,7 +674,7 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
         // Capture values to avoid accessing MainActor properties from detached task
         let recursive = self.includeSubfolders
         // let grayOut = self.grayOutExisting // Removed
-        let catalogID = self.selectedCatalog?.objectID
+        // let catalogID = self.selectedCatalog?.objectID // Unused
 
         Logger.shared.log("DEBUG: AdvancedCopy loadFiles from \(url.path)")
         loadingTask = Task.detached(priority: .userInitiated) { [weak self] in
@@ -931,13 +936,14 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
                 }
                 let catalogID = catalog.objectID
                 let repository = MediaRepository()  // Create new instance for background task
-                try? await repository.importMediaItems(from: copiedURLs, to: catalogID)
+                _ = try? await repository.importMediaItems(from: copiedURLs, to: catalogID)
             }
 
+            let finalCopiedURLs = copiedURLs // Capture as immutable
             await MainActor.run {
                 self.isCopying = false
                 self.copyProgress = 1.0
-                self.statusMessage = "Copy complete. \(copiedURLs.count) files copied."
+                self.statusMessage = "Copy complete. \(finalCopiedURLs.count) files copied."
                 Logger.shared.log("AdvancedCopyViewModel: Copy complete.")
 
                 // Refresh destination tree to show new folders
