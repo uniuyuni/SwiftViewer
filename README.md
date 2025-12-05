@@ -7,8 +7,9 @@ SwiftViewer is a high-performance media viewer for macOS, designed for photograp
 ### High-Performance Browsing
 - **Folders Mode**: Browse your file system directly with real-time folder monitoring.
 - **Catalog Mode**: Import folders into a database-backed catalog for persistent management.
+- **Photos Library Mode**: Browse Apple Photos Libraries directly, including RAW files and sidecar assets.
 - **Grid View**: Resizable thumbnails (50px-300px) with lazy loading for smooth scrolling.
-- **Sidebar**: Tree-based navigation with drag & drop support for both folders and catalogs.
+- **Sidebar**: Tree-based navigation with drag & drop support for folders, catalogs, and libraries.
 
 ### Advanced Filtering
 - **Text Search**: Filter by filename.

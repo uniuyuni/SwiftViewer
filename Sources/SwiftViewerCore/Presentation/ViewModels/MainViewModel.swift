@@ -328,24 +328,35 @@ public class MainViewModel: ObservableObject {
 
     func refreshAll() {
         Task { @MainActor in
-            // Refresh File System
-            refreshFolders()
-
-            // Refresh Catalog
-            if let catalog = currentCatalog {
-                loadMediaItems(from: catalog)
-                loadCollections(for: catalog)
-            }
-
-            // Refresh Metadata (if viewing a folder)
-            if let folder = currentFolder {
-                loadFiles(in: folder)
+            // Refresh based on current mode
+            if selectedPhotosGroupID != nil {
+                // Photos Mode
+                // Reload metadata for current items
+                await loadMetadataForCurrentFolder()
+                print("Refreshed Photos View metadata.")
+            } else if appMode == .catalog {
+                // Refresh Catalog
+                if let catalog = currentCatalog {
+                    loadMediaItems(from: catalog)
+                    loadCollections(for: catalog)
+                }
+                // Refresh Metadata (if viewing a folder in catalog)
+                if let folder = selectedCatalogFolder {
+                    // We might need to re-apply filter or reload metadata
+                    applyFilter() 
+                }
+            } else {
+                // Folder Mode
+                refreshFolders()
+                // Refresh Metadata
+                if let folder = currentFolder {
+                    loadFiles(in: folder)
+                }
             }
 
             // Clear caches
             ImageCacheService.shared.clearCache()
 
-            print("Refreshed all views.")
             print("Refreshed all views.")
         }
     }
@@ -357,26 +368,17 @@ public class MainViewModel: ObservableObject {
         case .folders:
             refreshFolders()
         case .catalog:
-            if let catalog = currentCatalog {
-                // Reload catalog items to reflect any external changes (though less likely for catalog)
-                // Or just ensure we are showing what we have.
-                // If we are in Photos mode (which might share .catalog or have its own state?)
-                // Actually Photos integration sets currentCatalog = nil.
-                loadMediaItems(from: catalog)
-            } else if selectedPhotosGroupID != nil {
-                // We are in Photos mode
-                // We should probably not reload aggressively to avoid resetting scroll position,
-                // but if items are missing, we might need to.
-                // For now, let's just log. The user said items disappear.
-                // If fileItems is empty, we should try to reload.
+            if selectedPhotosGroupID != nil {
+                // Photos Mode active
+                // Just refresh metadata, don't reload catalog items which would overwrite the view
+                Task { await loadMetadataForCurrentFolder() }
+                
                 if fileItems.isEmpty {
                     Logger.shared.log("Photos mode active but fileItems empty. Attempting reload.")
-                    // We need to find the library and group.
-                    // This is hard because selectedPhotosGroupID is just a string.
-                    // We'd need to parse it or store the objects.
-                    // For now, let's assume Photos mode doesn't need explicit refresh on active
-                    // unless we implement a specific reload logic.
                 }
+            } else if let catalog = currentCatalog {
+                // Reload catalog items to reflect any external changes
+                loadMediaItems(from: catalog)
             }
         }
     }
@@ -1600,6 +1602,34 @@ public class MainViewModel: ObservableObject {
     @Published var expandedPhotosGroups: Set<String> = [] // "LibraryID/DateID"
     @Published var selectedPhotosGroupID: String? // "LibraryID/DateID"
     
+    var isPhotosMode: Bool {
+        return selectedPhotosGroupID != nil
+    }
+    
+    var headerTitle: String {
+        if let groupID = selectedPhotosGroupID {
+            // Format: "LibraryID/DateID"
+            let components = groupID.components(separatedBy: "/")
+            if components.count == 2, let libraryID = UUID(uuidString: components[0]) {
+                let dateID = components[1]
+                // Find library name
+                if let library = photosLibraries.first(where: { $0.id == libraryID }) {
+                    return "\(library.name) - \(dateID)"
+                }
+            }
+            return "Photos Library"
+        } else if let collection = currentCollection {
+            return collection.name ?? "Collection"
+        } else if let folder = selectedCatalogFolder {
+            return folder.url.lastPathComponent
+        } else if appMode == .catalog, let catalog = currentCatalog {
+            return catalog.name ?? "Catalog"
+        } else if let folder = currentFolder {
+            return folder.name
+        }
+        return "SwiftViewer"
+    }
+    
     private let photosLibrariesKey = "SavedPhotosLibraries_v2"
     
     func loadSavedPhotosLibraries() {
@@ -1616,9 +1646,12 @@ public class MainViewModel: ObservableObject {
             for var library in savedLibraries {
                 print("Processing saved library: \(library.name)")
                 var isStale = false
+                var url = library.url
+                
+                // Try to resolve bookmark if available
                 if let bookmarkData = library.bookmarkData {
                     do {
-                        let url = try URL(resolvingBookmarkData: bookmarkData, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale)
+                        url = try URL(resolvingBookmarkData: bookmarkData, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale)
                         print("Resolved bookmark for \(library.name) at \(url.path)")
                         
                         if isStale {
@@ -1628,35 +1661,34 @@ public class MainViewModel: ObservableObject {
                                 url.stopAccessingSecurityScopedResource()
                             }
                         }
-                        
-                        let updatedLibrary = PhotosLibrary(id: library.id, name: library.name, url: url, bookmarkData: library.bookmarkData)
-                        
-                        if url.startAccessingSecurityScopedResource() {
-                            print("Successfully started accessing \(library.name)")
-                            validLibraries.append(updatedLibrary)
-                            loadAssets(for: updatedLibrary)
-                        } else {
-                            print("Failed to start accessing security scoped resource for \(library.name)")
-                            // Keep it anyway, maybe user can fix permissions later
-                            validLibraries.append(updatedLibrary)
-                        }
-                        
                     } catch {
                         print("Failed to resolve bookmark for \(library.name): \(error)")
-                        // Keep the original library entry even if bookmark resolution fails
-                        validLibraries.append(library)
+                        // Fallback to original URL if resolution fails
                     }
+                }
+                
+                // Update library with potentially new URL/Bookmark
+                let updatedLibrary = PhotosLibrary(id: library.id, name: library.name, url: url, bookmarkData: library.bookmarkData)
+                
+                // Attempt to access
+                if url.startAccessingSecurityScopedResource() {
+                    print("Successfully started accessing \(library.name)")
+                    validLibraries.append(updatedLibrary)
+                    loadAssets(for: updatedLibrary)
                 } else {
-                    print("No bookmark data for \(library.name)")
-                    // Keep it anyway
-                    validLibraries.append(library)
+                    print("Failed to start accessing security scoped resource for \(library.name). Attempting to load anyway (might fail if permissions lost).")
+                    // Add it anyway so the user sees it and maybe we can prompt for permission later
+                    validLibraries.append(updatedLibrary)
+                    // Try loading assets anyway - maybe we still have access or it's not strictly enforced in some contexts
+                    loadAssets(for: updatedLibrary)
                 }
             }
             
             self.photosLibraries = validLibraries
             self.objectWillChange.send() // Force UI update
-            // Do NOT save here, as it might overwrite valid data with partial data if we had bugs above.
-            // savePhotosLibraries() 
+            
+            // Save updated bookmarks if any changed
+            savePhotosLibraries()
         } catch {
             print("Failed to decode saved Photos Libraries: \(error)")
         }
@@ -1721,6 +1753,10 @@ public class MainViewModel: ObservableObject {
                 }
             } catch {
                 print("Failed to load Photos Library: \(error)")
+                await MainActor.run {
+                    // Set empty array to stop spinner and show "No items" (or we could add an error state)
+                    self.photosLibraryGroups[library.id] = []
+                }
             }
         }
     }
@@ -4745,5 +4781,6 @@ public class MainViewModel: ObservableObject {
         }
     }
     
+
 
 }

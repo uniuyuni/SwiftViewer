@@ -63,20 +63,7 @@ struct GridView: View {
     }
 
     private var title: String {
-        if viewModel.appMode == .catalog {
-            if let collection = viewModel.currentCollection {
-                return collection.name ?? "Collection"
-            } else if let folder = viewModel.selectedCatalogFolder {
-                return folder.url.lastPathComponent
-            } else if let catalog = viewModel.currentCatalog {
-                return catalog.name ?? "Catalog"
-            }
-        } else {
-            if let folder = viewModel.currentFolder {
-                return folder.name
-            }
-        }
-        return "SwiftViewer"
+        return viewModel.headerTitle
     }
     
     @ToolbarContentBuilder
@@ -309,73 +296,92 @@ struct GridItemOverlay: View {
     @ObservedObject var viewModel: MainViewModel
     
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            // Selection Indicator
-            if viewModel.selectedFiles.contains(item) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.white, .blue)
-                    .padding(4)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-            }
-            
-            // Color Label & Flag Indicator
-            if let colorName = viewModel.metadataCache[item.url.standardizedFileURL]?.colorLabel ?? item.colorLabel, let color = colorFromName(colorName) {
-                HStack(spacing: 2) {
-                    Circle()
-                        .fill(color)
-                        .frame(width: 8, height: 8)
-                        .background(Circle().fill(.white).frame(width: 10, height: 10))
-                    
-                    // Flag Indicator (next to color label)
-                    if let flagStatus = Optional(viewModel.metadataCache[item.url.standardizedFileURL]?.flagStatus ?? Int(item.flagStatus ?? 0)), flagStatus != 0 {
-                        Image(systemName: flagStatus == 1 ? "flag.fill" : "flag.slash.fill")
-                            .font(.system(size: 7))
-                            .foregroundStyle(flagStatus == 1 ? .green : .red)
-                    }
+        // Check if we should hide metadata overlay (except selection)
+        // Hide if in Photos Mode AND item is RAW
+        // We assume RAW if not in common compressed formats
+        let ext = item.url.pathExtension.lowercased()
+        let isRaw = !["jpg", "jpeg", "png", "heic", "tiff", "gif", "webp"].contains(ext)
+        
+        if viewModel.isPhotosMode && isRaw {
+            ZStack(alignment: .bottomTrailing) {
+                // Selection Indicator ONLY
+                if viewModel.selectedFiles.contains(item) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.white, .blue)
+                        .padding(4)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 }
-                .padding(3)
-                .offset(x: -3, y: -3)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            } else if let flagStatus = Optional(viewModel.metadataCache[item.url.standardizedFileURL]?.flagStatus ?? Int(item.flagStatus ?? 0)), flagStatus != 0 {
-                // Flag Indicator only (no color label)
-                Image(systemName: flagStatus == 1 ? "flag.fill" : "flag.slash.fill")
-                    .font(.system(size: 7))
-                    .foregroundStyle(flagStatus == 1 ? .green : .red)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ZStack(alignment: .bottomTrailing) {
+                // Selection Indicator
+                if viewModel.selectedFiles.contains(item) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.white, .blue)
+                        .padding(4)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                }
+                
+                // Color Label & Flag Indicator
+                if let colorName = viewModel.metadataCache[item.url.standardizedFileURL]?.colorLabel ?? item.colorLabel, let color = colorFromName(colorName) {
+                    HStack(spacing: 2) {
+                        Circle()
+                            .fill(color)
+                            .frame(width: 8, height: 8)
+                            .background(Circle().fill(.white).frame(width: 10, height: 10))
+                        
+                        // Flag Indicator (next to color label)
+                        if let flagStatus = Optional(viewModel.metadataCache[item.url.standardizedFileURL]?.flagStatus ?? Int(item.flagStatus ?? 0)), flagStatus != 0 {
+                            Image(systemName: flagStatus == 1 ? "flag.fill" : "flag.slash.fill")
+                                .font(.system(size: 7))
+                                .foregroundStyle(flagStatus == 1 ? .green : .red)
+                        }
+                    }
                     .padding(3)
                     .offset(x: -3, y: -3)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            }
-            
-            // Rating and Favorite Indicator
-            if let rating = viewModel.metadataCache[item.url.standardizedFileURL]?.rating ?? item.rating, rating > 0 {
-                HStack(spacing: 2) {
-                    ForEach(0..<rating, id: \.self) { _ in
-                        Image(systemName: "star.fill")
-                            .font(.system(size: 7))
-                            .foregroundStyle(.yellow)
-                    }
-                    
-                    // Favorite Indicator (next to rating)
-                    if let isFavorite = viewModel.metadataCache[item.url.standardizedFileURL]?.isFavorite ?? item.isFavorite, isFavorite {
-                        Image(systemName: "heart.fill")
-                            .font(.system(size: 7))
-                            .foregroundStyle(.pink)
-                    }
+                } else if let flagStatus = Optional(viewModel.metadataCache[item.url.standardizedFileURL]?.flagStatus ?? Int(item.flagStatus ?? 0)), flagStatus != 0 {
+                    // Flag Indicator only (no color label)
+                    Image(systemName: flagStatus == 1 ? "flag.fill" : "flag.slash.fill")
+                        .font(.system(size: 7))
+                        .foregroundStyle(flagStatus == 1 ? .green : .red)
+                        .padding(3)
+                        .offset(x: -3, y: -3)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
-                .padding(3)
-                .offset(x: -3, y: 3)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-            } else if let isFavorite = viewModel.metadataCache[item.url.standardizedFileURL]?.isFavorite ?? item.isFavorite, isFavorite {
-                // Favorite Indicator only (no rating)
-                Image(systemName: "heart.fill")
-                    .font(.system(size: 7))
-                    .foregroundStyle(.pink)
+                
+                // Rating and Favorite Indicator
+                if let rating = viewModel.metadataCache[item.url.standardizedFileURL]?.rating ?? item.rating, rating > 0 {
+                    HStack(spacing: 2) {
+                        ForEach(0..<rating, id: \.self) { _ in
+                            Image(systemName: "star.fill")
+                                .font(.system(size: 7))
+                                .foregroundStyle(.yellow)
+                        }
+                        
+                        // Favorite Indicator (next to rating)
+                        if let isFavorite = viewModel.metadataCache[item.url.standardizedFileURL]?.isFavorite ?? item.isFavorite, isFavorite {
+                            Image(systemName: "heart.fill")
+                                .font(.system(size: 7))
+                                .foregroundStyle(.pink)
+                        }
+                    }
                     .padding(3)
                     .offset(x: -3, y: 3)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                } else if let isFavorite = viewModel.metadataCache[item.url.standardizedFileURL]?.isFavorite ?? item.isFavorite, isFavorite {
+                    // Favorite Indicator only (no rating)
+                    Image(systemName: "heart.fill")
+                        .font(.system(size: 7))
+                        .foregroundStyle(.pink)
+                        .padding(3)
+                        .offset(x: -3, y: 3)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
     private func colorFromName(_ name: String) -> Color? {

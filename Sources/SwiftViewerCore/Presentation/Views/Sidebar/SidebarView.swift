@@ -535,6 +535,6 @@ struct SidebarListView: View {
         .listStyle(.sidebar)
         .frame(minWidth: 200)
         .debugSize()
-        .navigationTitle(viewModel.currentCollection?.name ?? viewModel.currentCatalog?.name ?? "SwiftViewer")
+        .navigationTitle(viewModel.headerTitle)
     }
 }

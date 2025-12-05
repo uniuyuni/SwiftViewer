@@ -99,4 +99,31 @@ final class SwiftViewerTests: XCTestCase {
         XCTAssertEqual(selectedFiles.count, 1)
         XCTAssertEqual(selectedFiles.first?.colorLabel, "Green", "Selected file should be updated with new attributes")
     }
+    
+    // MARK: - Library Mode Tests
+    
+    @MainActor
+    func testHeaderTitle() {
+        let controller = PersistenceController(inMemory: true)
+        let viewModel = MainViewModel(persistenceController: controller)
+        
+        // Default
+        XCTAssertEqual(viewModel.headerTitle, "SwiftViewer")
+        
+        // Catalog Mode
+        let catalog = Catalog(context: controller.container.viewContext)
+        catalog.name = "My Catalog"
+        viewModel.openCatalog(catalog)
+        XCTAssertEqual(viewModel.headerTitle, "My Catalog")
+        
+        // Photos Mode
+        let libID = UUID()
+        let library = PhotosLibrary(id: libID, name: "My Library", url: URL(fileURLWithPath: "/"), bookmarkData: nil)
+        viewModel.photosLibraries = [library]
+        let groupID = "2023-01-01"
+        viewModel.selectedPhotosGroupID = "\(libID.uuidString)/\(groupID)"
+        
+        XCTAssertTrue(viewModel.isPhotosMode)
+        XCTAssertEqual(viewModel.headerTitle, "My Library - 2023-01-01")
+    }
 }
