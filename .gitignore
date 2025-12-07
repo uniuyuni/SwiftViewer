@@ -4,6 +4,7 @@
 *.xcodeproj
 *.xcworkspace
 TESTFILES/
+*.app
 *.jpg
 build_*
 test_*

@@ -95,6 +95,10 @@ This project uses Swift Package Manager.
 ./create_app.sh
 ```
 This will create `SwiftViewer.app` in the project root.
+To create a distributable zip file:
+```bash
+zip -r SwiftViewer.app.zip SwiftViewer.app
+```
 
 ### Testing
 To run the automated test suite:
