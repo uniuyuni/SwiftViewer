@@ -2,9 +2,9 @@ import SwiftUI
 
 struct SidebarView: View {
     @ObservedObject var viewModel: MainViewModel
-    
+
     @State private var showCatalogManager = false
-    
+
     var body: some View {
         let selectionBinding = Binding<FileItem?>(
             get: { viewModel.currentFolder },
@@ -16,7 +16,7 @@ struct SidebarView: View {
                 }
             }
         )
-        
+
         VStack(spacing: 0) {
             SidebarListView(
                 viewModel: viewModel,
@@ -37,7 +37,8 @@ struct SidebarView: View {
             }
         }
         .sheet(isPresented: $showCatalogManager) {
-            CatalogManagerView(selectedCatalog: $viewModel.currentCatalog, isImporting: viewModel.isImporting)
+            CatalogManagerView(
+                selectedCatalog: $viewModel.currentCatalog, isImporting: viewModel.isImporting)
         }
         .alert("Rename Folder", isPresented: $showRenameAlert) {
             TextField("New Name", text: $newFolderName)
@@ -73,7 +74,9 @@ struct SidebarView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             if let source = viewModel.moveSourceURL, let dest = viewModel.moveDestinationURL {
-                Text("Are you sure you want to move '\(source.lastPathComponent)' to '\(dest.lastPathComponent)'?")
+                Text(
+                    "Are you sure you want to move '\(source.lastPathComponent)' to '\(dest.lastPathComponent)'?"
+                )
             } else {
                 Text("Are you sure you want to move this folder?")
             }
@@ -85,7 +88,9 @@ struct SidebarView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             if let source = viewModel.copySourceURL, let dest = viewModel.copyDestinationURL {
-                Text("Are you sure you want to copy '\(source.lastPathComponent)' to '\(dest.lastPathComponent)'?")
+                Text(
+                    "Are you sure you want to copy '\(source.lastPathComponent)' to '\(dest.lastPathComponent)'?"
+                )
             } else {
                 Text("Are you sure you want to copy this folder?")
             }
@@ -100,9 +105,9 @@ struct SidebarView: View {
             }
         }
     }
-    
+
     @ObservedObject private var thumbnailService = ThumbnailGenerationService.shared
-    
+
     @ViewBuilder
     private var thumbnailStatusView: some View {
         if thumbnailService.isGenerating {
@@ -116,7 +121,7 @@ struct SidebarView: View {
                         .foregroundStyle(.secondary)
                     Spacer()
                 }
-                
+
                 // Always show progress bar if generating
                 ProgressView(value: thumbnailService.progress)
                     .progressViewStyle(.linear)
@@ -124,22 +129,24 @@ struct SidebarView: View {
             }
             .padding()
             .background(.regularMaterial)
-            .overlay(Rectangle().frame(height: 1).foregroundStyle(Color(nsColor: .separatorColor)), alignment: .top)
+            .overlay(
+                Rectangle().frame(height: 1).foregroundStyle(Color(nsColor: .separatorColor)),
+                alignment: .top)
         }
     }
-    
+
     @State private var showRenameAlert = false
     @State private var folderToRename: URL?
     @State private var newFolderName = ""
-    
+
     @State private var showCollectionRenameAlert = false
     @State private var collectionToRename: Collection?
     @State private var newCollectionName = ""
-    
+
     @State private var showCatalogRenameAlert = false
     @State private var catalogToRename: Catalog?
     @State private var newCatalogName = ""
-    
+
     private func refresh() {
         Task {
             if let folder = viewModel.currentFolder {
@@ -152,9 +159,6 @@ struct SidebarView: View {
 
 // Helper to add keyboard shortcut
 
-
-
-
 struct CatalogSection: View {
     @ObservedObject var viewModel: MainViewModel
     @Binding var showCatalogManager: Bool
@@ -164,13 +168,13 @@ struct CatalogSection: View {
     @Binding var showCatalogRenameAlert: Bool
     @Binding var catalogToRename: Catalog?
     @Binding var newCatalogName: String
-    
+
     var body: some View {
         Section("Catalogs") {
             Button("Manage Catalogs") {
                 showCatalogManager = true
             }
-            
+
             if let catalog = viewModel.currentCatalog {
                 HStack {
                     Button {
@@ -179,7 +183,7 @@ struct CatalogSection: View {
                         Label(catalog.name ?? "Untitled", systemImage: "book.closed.fill")
                     }
                     .buttonStyle(.plain)
-                    
+
                     if viewModel.isScanningCatalog || viewModel.isSyncingCatalog {
                         ProgressView()
                             .controlSize(.small)
@@ -194,7 +198,7 @@ struct CatalogSection: View {
                         viewModel.optimizeCatalog()
                     }
                 }
-                
+
                 Section("Folders") {
                     // Pending Imports
                     if !viewModel.pendingImports.isEmpty {
@@ -211,21 +215,24 @@ struct CatalogSection: View {
                             .padding(.leading, 4)
                         }
                     }
-                    
+
                     if viewModel.catalogRootNodes.isEmpty {
                         Text("No folders")
                             .foregroundStyle(.secondary)
                     } else {
-                        CatalogFolderTreeView(nodes: viewModel.catalogRootNodes, viewModel: viewModel, folderToRename: $folderToRename, newFolderName: $newFolderName, showRenameAlert: $showRenameAlert)
+                        CatalogFolderTreeView(
+                            nodes: viewModel.catalogRootNodes, viewModel: viewModel,
+                            folderToRename: $folderToRename, newFolderName: $newFolderName,
+                            showRenameAlert: $showRenameAlert)
                     }
                 }
-                
-                }
-                
-                Button(action: { viewModel.presentImportDialog() }) {
-                    Label("Import...", systemImage: "square.and.arrow.down")
-                }
-                .padding(.leading)
+
+            }
+
+            Button(action: { viewModel.presentImportDialog() }) {
+                Label("Import...", systemImage: "square.and.arrow.down")
+            }
+            .padding(.leading)
         }
         .dropDestination(for: URL.self) { items, location in
             guard let url = items.first else { return false }
@@ -238,30 +245,35 @@ struct CatalogSection: View {
 struct PhotosLibrarySection: View {
     @ObservedObject var viewModel: MainViewModel
     @State private var showFileImporter = false
-    
+
     var body: some View {
-        Section(header: HStack {
-            Text("Photos Libraries")
-            Spacer()
-            Button {
-                showFileImporter = true
-            } label: {
-                Image(systemName: "plus")
+        Section(
+            header: HStack {
+                Text("Photos Libraries")
+                Spacer()
+                Button {
+                    showFileImporter = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-        }) {
+        ) {
             ForEach(viewModel.photosLibraries) { library in
                 PhotosLibraryNodeView(library: library, viewModel: viewModel)
             }
         }
-        .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.package], allowsMultipleSelection: false) { result in
+        .fileImporter(
+            isPresented: $showFileImporter, allowedContentTypes: [.package],
+            allowsMultipleSelection: false
+        ) { result in
             switch result {
             case .success(let urls):
                 if let url = urls.first {
                     // Request access to the folder
                     guard url.startAccessingSecurityScopedResource() else { return }
                     viewModel.addPhotosLibrary(url: url)
-                    // Note: We should stop accessing when done, but for a long-lived library reference, 
+                    // Note: We should stop accessing when done, but for a long-lived library reference,
                     // we might need to persist bookmark data. For now, we keep it simple.
                 }
             case .failure(let error):
@@ -274,13 +286,14 @@ struct PhotosLibrarySection: View {
 struct PhotosLibraryNodeView: View {
     let library: PhotosLibrary
     @ObservedObject var viewModel: MainViewModel
-    
+
     var body: some View {
         DisclosureGroup(
             content: {
                 if let groups = viewModel.photosLibraryGroups[library.id] {
                     ForEach(groups) { group in
-                        PhotosDateGroupNodeView(library: library, group: group, viewModel: viewModel)
+                        PhotosDateGroupNodeView(
+                            library: library, group: group, viewModel: viewModel)
                     }
                 } else {
                     ProgressView()
@@ -307,15 +320,16 @@ struct PhotosDateGroupNodeView: View {
     let library: PhotosLibrary
     let group: PhotosDateGroup
     @ObservedObject var viewModel: MainViewModel
-    
+
     var isSelected: Bool {
-        viewModel.selectedPhotosGroupID == "\(library.id.uuidString)/\(group.id)" && viewModel.currentCollection == nil
+        viewModel.selectedPhotosGroupID == "\(library.id.uuidString)/\(group.id)"
+            && viewModel.currentCollection == nil
     }
-    
+
     var body: some View {
         HStack {
             Image(systemName: "folder")
-            Text(group.id) // YYYY-MM-DD
+            Text(group.id)  // YYYY-MM-DD
             Spacer()
             Text("\(group.assets.count)")
                 .foregroundStyle(.secondary)
@@ -341,21 +355,23 @@ struct LocationsSection: View {
     @Binding var folderToRename: URL?
     @Binding var newFolderName: String
     @Binding var showRenameAlert: Bool
-    
+
     var body: some View {
-        Section(header: HStack {
-            Text("Locations")
-            Spacer()
-            Button {
-                Task {
-                    await viewModel.loadRootFolders()
+        Section(
+            header: HStack {
+                Text("Locations")
+                Spacer()
+                Button {
+                    Task {
+                        await viewModel.loadRootFolders()
+                    }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
                 }
-            } label: {
-                Image(systemName: "arrow.clockwise")
+                .buttonStyle(.plain)
+                .help("Refresh Devices")
             }
-            .buttonStyle(.plain)
-            .help("Refresh Devices")
-        }) {
+        ) {
             ForEach(viewModel.rootFolders) { folder in
                 FolderNodeView(folder: folder, viewModel: viewModel)
             }
@@ -369,10 +385,12 @@ struct CatalogFolderTreeView: View {
     @Binding var folderToRename: URL?
     @Binding var newFolderName: String
     @Binding var showRenameAlert: Bool
-    
+
     var body: some View {
         ForEach(nodes) { node in
-            CatalogFolderNodeView(node: node, viewModel: viewModel, folderToRename: $folderToRename, newFolderName: $newFolderName, showRenameAlert: $showRenameAlert)
+            CatalogFolderNodeView(
+                node: node, viewModel: viewModel, folderToRename: $folderToRename,
+                newFolderName: $newFolderName, showRenameAlert: $showRenameAlert)
         }
     }
 }
@@ -384,22 +402,24 @@ struct CatalogFolderNodeView: View {
     @Binding var newFolderName: String
     @Binding var showRenameAlert: Bool
     @State private var showRemoveConfirmation = false
-    
+
     var isExpanded: Binding<Bool> {
         Binding(
             get: { viewModel.expandedCatalogFolders.contains(node.url.path) },
             set: { _ in viewModel.toggleCatalogExpansion(for: node.url) }
         )
     }
-    
+
     var isSelected: Bool {
         viewModel.selectedCatalogFolder?.url == node.url && viewModel.currentCollection == nil
     }
-    
+
     var body: some View {
         if let children = node.children, !children.isEmpty {
             DisclosureGroup(isExpanded: isExpanded) {
-                CatalogFolderTreeView(nodes: children, viewModel: viewModel, folderToRename: $folderToRename, newFolderName: $newFolderName, showRenameAlert: $showRenameAlert)
+                CatalogFolderTreeView(
+                    nodes: children, viewModel: viewModel, folderToRename: $folderToRename,
+                    newFolderName: $newFolderName, showRenameAlert: $showRenameAlert)
             } label: {
                 folderContent
             }
@@ -408,7 +428,7 @@ struct CatalogFolderNodeView: View {
                 .padding(.leading, 12)
         }
     }
-    
+
     var folderContent: some View {
         HStack {
             Label(node.name, systemImage: "folder")
@@ -433,20 +453,24 @@ struct CatalogFolderNodeView: View {
         .background(isSelected ? Color.accentColor : Color.clear)
         .foregroundStyle(isSelected ? .white : .primary)
         .cornerRadius(6)
-        .onDrop(of: [.fileURL], delegate: FolderDropDelegate(targetFolder: FileItem(url: node.url, isDirectory: true), viewModel: viewModel))
+        .onDrop(
+            of: [.fileURL],
+            delegate: FolderDropDelegate(
+                targetFolder: FileItem(url: node.url, isDirectory: true), viewModel: viewModel)
+        )
         .contextMenu {
             Button("Update Folder") {
                 viewModel.triggerFolderUpdateCheck(folder: node.url)
             }
-            
+
             Button("Rename") {
                 folderToRename = node.url
                 newFolderName = node.name
                 showRenameAlert = true
             }
-            
+
             Divider()
-            
+
             Button("Remove from Catalog", role: .destructive) {
                 showRemoveConfirmation = true
             }
@@ -467,7 +491,7 @@ struct CollectionsSectionView: View {
     @Binding var showCollectionRenameAlert: Bool
     @Binding var collectionToRename: Collection?
     @Binding var newCollectionName: String
-    
+
     var body: some View {
         Section("Collections") {
             ForEach(viewModel.collections) { collection in
@@ -495,9 +519,10 @@ struct CollectionsSectionView: View {
                     }
                 }
             }
-            
+
             Button {
-                viewModel.createCollection(name: "New Collection \(Int(Date().timeIntervalSince1970))")
+                viewModel.createCollection(
+                    name: "New Collection \(Int(Date().timeIntervalSince1970))")
             } label: {
                 Label("New Collection", systemImage: "plus")
             }
@@ -508,7 +533,7 @@ struct CollectionsSectionView: View {
 struct SidebarListView: View {
     @ObservedObject var viewModel: MainViewModel
     @Binding var selection: FileItem?
-    
+
     @Binding var showCatalogManager: Bool
     @Binding var folderToRename: URL?
     @Binding var newFolderName: String
@@ -519,22 +544,30 @@ struct SidebarListView: View {
     @Binding var showCatalogRenameAlert: Bool
     @Binding var catalogToRename: Catalog?
     @Binding var newCatalogName: String
-    
+
     var body: some View {
         List(selection: $selection) {
             if viewModel.appMode == .catalog {
-                CollectionsSectionView(viewModel: viewModel, showCollectionRenameAlert: $showCollectionRenameAlert, collectionToRename: $collectionToRename, newCollectionName: $newCollectionName)
+                CollectionsSectionView(
+                    viewModel: viewModel, showCollectionRenameAlert: $showCollectionRenameAlert,
+                    collectionToRename: $collectionToRename, newCollectionName: $newCollectionName)
             }
-            
-            CatalogSection(viewModel: viewModel, showCatalogManager: $showCatalogManager, folderToRename: $folderToRename, newFolderName: $newFolderName, showRenameAlert: $showRenameAlert, showCatalogRenameAlert: $showCatalogRenameAlert, catalogToRename: $catalogToRename, newCatalogName: $newCatalogName)
-            
+
+            CatalogSection(
+                viewModel: viewModel, showCatalogManager: $showCatalogManager,
+                folderToRename: $folderToRename, newFolderName: $newFolderName,
+                showRenameAlert: $showRenameAlert, showCatalogRenameAlert: $showCatalogRenameAlert,
+                catalogToRename: $catalogToRename, newCatalogName: $newCatalogName)
+
             PhotosLibrarySection(viewModel: viewModel)
-            
-            LocationsSection(viewModel: viewModel, folderToRename: $folderToRename, newFolderName: $newFolderName, showRenameAlert: $showRenameAlert)
+
+            LocationsSection(
+                viewModel: viewModel, folderToRename: $folderToRename,
+                newFolderName: $newFolderName, showRenameAlert: $showRenameAlert)
         }
         .listStyle(.sidebar)
         .frame(minWidth: 200)
-        .debugSize()
+
         .navigationTitle(viewModel.headerTitle)
     }
 }

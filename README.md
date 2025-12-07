@@ -2,6 +2,8 @@
 
 SwiftViewer is a high-performance media viewer for macOS, designed for photographers and creative professionals. It offers fast browsing, advanced filtering, and efficient management of large image collections.
 
+![Screenshot](screenshot.png)
+
 ## Features
 
 ### High-Performance Browsing
