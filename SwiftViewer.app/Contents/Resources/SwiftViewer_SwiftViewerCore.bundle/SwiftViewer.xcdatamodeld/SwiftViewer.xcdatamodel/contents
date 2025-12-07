@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="1" systemVersion="11A491" minimumToolsVersion="Automatic" sourceLanguage="Swift" userDefinedModelVersionIdentifier="">
+    <entity name="Catalog" representedClassName="Catalog" syncable="YES">
+        <attribute name="color" optional="YES" attributeType="String"/>
+        <attribute name="createdDate" optional="NO" attributeType="Date" defaultDateTimeInterval="0"/>
+        <attribute name="id" optional="NO" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="modifiedDate" optional="NO" attributeType="Date" defaultDateTimeInterval="0"/>
+        <attribute name="name" optional="NO" attributeType="String"/>
+        <relationship name="mediaItems" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="MediaItem" inverseName="catalog" inverseEntity="MediaItem"/>
+        <relationship name="collections" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Collection" inverseName="catalog" inverseEntity="Collection"/>
+    </entity>
+    <entity name="Collection" representedClassName="Collection" syncable="YES">
+        <attribute name="filterCriteria" optional="YES" attributeType="Binary"/>
+        <attribute name="id" optional="NO" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="name" optional="NO" attributeType="String"/>
+        <attribute name="type" optional="NO" attributeType="String"/>
+        <relationship name="catalog" optional="NO" maxCount="1" deletionRule="Nullify" destinationEntity="Catalog" inverseName="collections" inverseEntity="Catalog"/>
+        <relationship name="mediaItems" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="MediaItem" inverseName="collections" inverseEntity="MediaItem"/>
+    </entity>
+    <entity name="ExifData" representedClassName="ExifData" syncable="YES">
+        <attribute name="aperture" optional="YES" attributeType="Double" usesScalarValueType="YES"/>
+        <attribute name="artist" optional="YES" attributeType="String"/>
+        <attribute name="cameraMake" optional="YES" attributeType="String"/>
+        <attribute name="cameraModel" optional="YES" attributeType="String"/>
+        <attribute name="copyright" optional="YES" attributeType="String"/>
+        <attribute name="dateTimeOriginal" optional="YES" attributeType="Date"/>
+        <attribute name="descriptionText" optional="YES" attributeType="String"/>
+        <attribute name="focalLength" optional="YES" attributeType="Double" usesScalarValueType="YES"/>
+        <attribute name="gpsLatitude" optional="YES" attributeType="Double" usesScalarValueType="YES"/>
+        <attribute name="gpsLongitude" optional="YES" attributeType="Double" usesScalarValueType="YES"/>
+        <attribute name="id" optional="NO" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="iso" optional="YES" attributeType="Integer 32" usesScalarValueType="YES"/>
+        <attribute name="lensModel" optional="YES" attributeType="String"/>
+        <attribute name="rating" optional="YES" attributeType="Integer 16" usesScalarValueType="YES"/>
+        <attribute name="rawProps" optional="YES" attributeType="Binary"/>
+        <attribute name="exposureCompensation" optional="YES" attributeType="Double" usesScalarValueType="YES" defaultValueString="0.0"/>
+        <attribute name="brightnessValue" optional="YES" attributeType="Double" defaultValueString="0.0"/>
+        <attribute name="exposureBias" optional="YES" attributeType="Double" defaultValueString="0.0"/>
+        <attribute name="serialNumber" optional="YES" attributeType="String"/>
+        <attribute name="title" optional="YES" attributeType="String"/>
+        <attribute name="caption" optional="YES" attributeType="String"/>
+        <attribute name="latitude" optional="YES" attributeType="Double" defaultValueString="0.0"/>
+        <attribute name="longitude" optional="YES" attributeType="Double" defaultValueString="0.0"/>
+        <attribute name="altitude" optional="YES" attributeType="Double" defaultValueString="0.0"/>
+        <attribute name="imageDirection" optional="YES" attributeType="Double" defaultValueString="0.0"/>
+        <attribute name="exposureProgram" optional="YES" attributeType="String"/>
+        <attribute name="flash" optional="YES" attributeType="String"/>
+        <attribute name="meteringMode" optional="YES" attributeType="String"/>
+        <attribute name="shutterSpeed" optional="YES" attributeType="String"/>
+        <attribute name="software" optional="YES" attributeType="String"/>
+        <attribute name="whiteBalance" optional="YES" attributeType="String"/>
+        <relationship name="mediaItem" optional="NO" maxCount="1" deletionRule="Nullify" destinationEntity="MediaItem" inverseName="exifData" inverseEntity="MediaItem"/>
+    </entity>
+    <entity name="MediaItem" representedClassName="MediaItem" syncable="YES">
+        <attribute name="captureDate" optional="YES" attributeType="Date"/>
+        <attribute name="colorLabel" optional="YES" attributeType="String"/>
+        <attribute name="fileExists" optional="NO" attributeType="Boolean" usesScalarValueType="YES" defaultValueString="YES"/>
+        <attribute name="fileName" optional="NO" attributeType="String"/>
+        <attribute name="fileSize" optional="NO" attributeType="Integer 64" usesScalarValueType="YES" defaultValueString="0"/>
+        <attribute name="flagStatus" optional="NO" attributeType="Integer 16" usesScalarValueType="YES" defaultValueString="0"/>
+        <attribute name="height" optional="NO" attributeType="Integer 32" usesScalarValueType="YES" defaultValueString="0"/>
+        <attribute name="id" optional="NO" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="importDate" optional="NO" attributeType="Date" defaultDateTimeInterval="0"/>
+        <attribute name="isFavorite" optional="NO" attributeType="Boolean" usesScalarValueType="YES" defaultValueString="NO"/>
+        <attribute name="isFlagged" optional="NO" attributeType="Boolean" usesScalarValueType="YES" defaultValueString="NO"/>
+        <attribute name="mediaType" optional="NO" attributeType="String"/>
+        <attribute name="modifiedDate" optional="NO" attributeType="Date" defaultDateTimeInterval="0"/>
+        <attribute name="orientation" optional="NO" attributeType="Integer 16" usesScalarValueType="YES" defaultValueString="1"/>
+        <attribute name="originalPath" optional="NO" attributeType="String"/>
+        <attribute name="rating" optional="NO" attributeType="Integer 16" usesScalarValueType="YES" defaultValueString="0"/>
+        <attribute name="width" optional="NO" attributeType="Integer 32" usesScalarValueType="YES" defaultValueString="0"/>
+        <relationship name="catalog" optional="NO" maxCount="1" deletionRule="Nullify" destinationEntity="Catalog" inverseName="mediaItems" inverseEntity="Catalog"/>
+        <relationship name="collections" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Collection" inverseName="mediaItems" inverseEntity="Collection"/>
+        <relationship name="exifData" optional="YES" maxCount="1" deletionRule="Cascade" destinationEntity="ExifData" inverseName="mediaItem" inverseEntity="ExifData"/>
+    </entity>
+</model>

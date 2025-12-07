@@ -3,7 +3,6 @@
 .swiftpm/
 *.xcodeproj
 *.xcworkspace
-*.app
 TESTFILES/
 *.jpg
 build_*
