@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SidebarView: View {
     @ObservedObject var viewModel: MainViewModel
@@ -234,11 +235,7 @@ struct CatalogSection: View {
             }
             .padding(.leading)
         }
-        .dropDestination(for: URL.self) { items, location in
-            guard let url = items.first else { return false }
-            viewModel.importFolderToCatalog(url: url)
-            return true
-        }
+        .onDrop(of: [.folder], delegate: CatalogDropDelegate(viewModel: viewModel))
     }
 }
 

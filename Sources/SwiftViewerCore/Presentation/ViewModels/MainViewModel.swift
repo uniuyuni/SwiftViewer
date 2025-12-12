@@ -1868,8 +1868,7 @@ public class MainViewModel: ObservableObject {
     private func buildCatalogTree(from folders: [URL]) -> [CatalogFolderNode] {
         guard !folders.isEmpty else { return [] }
 
-        // Only show explicitly added folders as roots.
-        // Do not show unadded parent folders.
+        // Only show explicitly added folders as roots (or their parents if reconstructed by buildTree).
         
         // Calculate file counts (recursive for each root)
         var fileCounts: [String: Int] = [:]
@@ -1896,14 +1895,8 @@ public class MainViewModel: ObservableObject {
             }
         }
         
-        // Create nodes
-        let nodes = folders.map { url -> CatalogFolderNode in
-            let key = url.path.lowercased()
-            return CatalogFolderNode(url: url, fileCount: fileCounts[key] ?? 0)
-        }
-        
-        // Sort by name
-        return nodes.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        // Build Hierarchical Tree
+        return buildTree(urls: folders, fileCounts: fileCounts)
     }
 
     // Helper Class for building

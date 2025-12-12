@@ -58,7 +58,11 @@ struct GridView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Are you sure you want to move \(viewModel.itemsToDelete.count) items to the Trash?")
+            if viewModel.appMode == .catalog {
+                Text("Are you sure you want to remove \(viewModel.itemsToDelete.count) items from the Catalog?")
+            } else {
+                Text("Are you sure you want to move \(viewModel.itemsToDelete.count) items to the Trash?")
+            }
         }
     }
 
@@ -241,8 +245,14 @@ struct GridItemWrapper: View {
             
             Divider()
             
-            Button("Move to Trash", role: .destructive) {
-                viewModel.confirmDelete(targetItems)
+            if viewModel.appMode == .catalog {
+                Button("Remove from Catalog", role: .destructive) {
+                    viewModel.confirmDelete(targetItems)
+                }
+            } else {
+                Button("Move to Trash", role: .destructive) {
+                    viewModel.confirmDelete(targetItems)
+                }
             }
         }
         .onDrag {
