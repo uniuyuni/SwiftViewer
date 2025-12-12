@@ -128,6 +128,13 @@ struct GridViewContent: View {
                 viewModel.gridColumnsCount = cols
             }
         }
+        .onChange(of: viewModel.thumbnailSize) { _, _ in
+            let spacing: CGFloat = 10
+            let minSize = viewModel.thumbnailSize
+            let availableWidth = max(0, size.width - 48)
+            let cols = max(1, Int((availableWidth + spacing) / (minSize + spacing)))
+            viewModel.gridColumnsCount = cols
+        }
         .onAppear {
             // Initial calculation
             let spacing: CGFloat = 10

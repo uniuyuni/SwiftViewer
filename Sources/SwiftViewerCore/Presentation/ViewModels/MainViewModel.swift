@@ -446,7 +446,8 @@ public class MainViewModel: ObservableObject {
         selectedFiles.removeAll()
         currentFile = nil
         // Reset filters as requested by user
-        filterCriteria = FilterCriteria()
+        // Reset filters (Partial: Clear values, keep layout)
+        filterCriteria.resetSelections()
         isFilterDisabled = false
 
         // Suspend thumbnail generation to prioritize UI/DB for folder loading
@@ -483,7 +484,8 @@ public class MainViewModel: ObservableObject {
         selectedFiles.removeAll()
         currentFile = nil
         // Reset filters
-        filterCriteria = FilterCriteria()
+        // Reset filters (Partial: Clear values, keep layout)
+        filterCriteria.resetSelections()
         isFilterDisabled = false
 
         selectedCatalogFolder = nil  // Reset folder filter
@@ -519,7 +521,8 @@ public class MainViewModel: ObservableObject {
             selectedCatalogFolder = nil
         }
         // Reset filters when changing folder in catalog
-        filterCriteria = FilterCriteria()
+        // Reset filters (Partial: Clear values, keep layout)
+        filterCriteria.resetSelections()
         isFilterDisabled = false
         
         // Apply filter immediately to show items in selected folder
