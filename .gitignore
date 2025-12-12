@@ -5,6 +5,7 @@
 *.xcworkspace
 TESTFILES/
 *.app
+*.app.zip
 *.jpg
 build_*
 test_*
