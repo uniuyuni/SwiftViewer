@@ -1367,11 +1367,43 @@ public class MainViewModel: ObservableObject {
 
     var availableShutterSpeeds: [String] {
         let speeds = metadataCache.values.compactMap { $0.shutterSpeed }
-        var result = Array(Set(speeds)).sorted()
+        let uniqueValues = Set(speeds)
+        var result = uniqueValues.sorted { s1, s2 in
+            let v1 = parseShutterSpeed(s1)
+            let v2 = parseShutterSpeed(s2)
+            return v1 < v2
+        }
+        
         if metadataCache.values.contains(where: { $0.shutterSpeed == nil }) {
             result.insert("Unknown", at: 0)
         }
         return result
+    }
+    
+    // Helper to parse "1/100", "0.5", "2"" to Double for sorting
+    private func parseShutterSpeed(_ s: String) -> Double {
+        // Handle "1/X"
+        if s.contains("/") {
+            let parts = s.split(separator: "/")
+            if parts.count == 2, let num = Double(parts[0]), let den = Double(parts[1]), den != 0 {
+                return num / den
+            }
+        }
+        
+        // Handle "X"" (seconds)
+        if s.hasSuffix("\"") {
+            let numStr = s.dropLast()
+            if let num = Double(numStr) {
+                return num
+            }
+        }
+        
+        // Handle plain number
+        if let val = Double(s) {
+            return val
+        }
+        
+        return 0
     }
 
     var availableApertures: [String] {
