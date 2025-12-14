@@ -108,6 +108,54 @@ public class MainViewModel: ObservableObject {
         isFullScreen = false
     }
 
+    // Sub View Window
+    var subWindow: NSWindow?
+    
+    func toggleSubView() {
+        // If window exists, close it
+        if let existing = subWindow {
+            existing.close()
+            subWindow = nil
+            return
+        }
+        
+        // Check for multiple screens
+        let screens = NSScreen.screens
+        guard screens.count > 1 else {
+            // Optional: Show alert or log
+            Logger.shared.log("Sub View requires multiple displays.")
+            return
+        }
+        
+        // Determine target screen (screen that doesn't have the main window)
+        // Default to the second screen if logic fails
+        let currentScreen = NSApp.keyWindow?.screen ?? screens.first
+        let targetScreen = screens.first(where: { $0 != currentScreen }) ?? screens.last
+        
+        guard let target = targetScreen else { return }
+        
+        // Create Window
+        let newWindow = NSWindow(
+            contentRect: target.frame,
+            styleMask: [.borderless], // Full screen feel
+            backing: .buffered,
+            defer: false
+        )
+        
+        // Set Content
+        let hostingController = NSHostingController(rootView: SubPreviewView(viewModel: self))
+        newWindow.contentViewController = hostingController
+        
+        newWindow.level = .normal
+        newWindow.collectionBehavior = [.fullScreenAuxiliary, .canJoinAllSpaces] // Allow showing on top/spaces
+        newWindow.isReleasedWhenClosed = false // We manage lifecycle
+        
+        newWindow.setFrame(target.frame, display: true)
+        newWindow.makeKeyAndOrderFront(nil)
+        
+        self.subWindow = newWindow
+    }
+
     func toggleInspector() {
         isInspectorVisible.toggle()
     }

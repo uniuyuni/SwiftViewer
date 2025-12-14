@@ -37,6 +37,8 @@ SwiftViewer is a high-performance media viewer for macOS, designed for photograp
   - Embedded preview extraction for fast thumbnails.
   - Correct orientation handling for all file types.
 - **Preview**: Large preview with zoom (pinch gesture/double-click) and pan capabilities.
+- **Full Screen Preview**: Toggle immersive full screen mode with `F` key (supports arrow keys navigation).
+- **Sub View**: `Option+F` to open a synchronized full screen preview on a secondary display.
 - **Video Playback**: AVPlayer-based video playback with seek controls.
 
 ### File Management
@@ -127,4 +129,19 @@ Test coverage includes:
 ## License
 
 Copyright (c) 2025. All rights reserved.
+
+## Keyboard Shortcuts
+
+- **F**: Toggle Full Screen
+- **Option + F**: Toggle Sub View (Multi-Display)
+- **I**: Toggle Inspector
+- **Space**: Quick Look
+- **Command + R**: Refresh All
+- **Command + Shift + R**: Reveal in Finder
+- **Command + Shift + K**: Advanced Copy
+- **0-5**: Set Rating
+- **A**: Set Pick Flag
+- **X**: Set Reject Flag
+- **U**: Unflag
+
 

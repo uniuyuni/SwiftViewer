@@ -28,3 +28,14 @@ public extension FocusedValues {
 struct IsFullScreenKey: FocusedValueKey {
     typealias Value = Bool
 }
+
+struct ToggleSubViewKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+public extension FocusedValues {
+    var toggleSubView: (() -> Void)? {
+        get { self[ToggleSubViewKey.self] }
+        set { self[ToggleSubViewKey.self] = newValue }
+    }
+}

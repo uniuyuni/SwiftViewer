@@ -20,6 +20,7 @@ struct SwiftViewerApp: App {
             
             CommandMenu("View Options") {
                 InspectorToggleMenuButton()
+                SubViewToggleMenuButton()
             }
             
             CommandMenu("Tools") {
@@ -103,5 +104,17 @@ struct AdvancedCopyMenuButton: View {
         }
         .keyboardShortcut("K", modifiers: [.command, .shift])
         .disabled(isFullScreen == true)
+    }
+}
+
+struct SubViewToggleMenuButton: View {
+    @FocusedValue(\.toggleSubView) var toggleSubView
+    
+    var body: some View {
+        Button("Trigger Sub View") {
+            toggleSubView?()
+        }
+        .keyboardShortcut("f", modifiers: .option)
+        .disabled(toggleSubView == nil || NSScreen.screens.count < 2)
     }
 }

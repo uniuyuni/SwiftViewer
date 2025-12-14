@@ -32,6 +32,26 @@ public struct MainWindow: View {
             )
             .onAppear {
                 NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                    // Full Screen Navigation
+                    if viewModel.isFullScreen {
+                        switch event.keyCode {
+                        case 123: // Left Arrow
+                            Task { @MainActor in viewModel.selectPrevious() }
+                            return nil
+                        case 124: // Right Arrow
+                            Task { @MainActor in viewModel.selectNext() }
+                            return nil
+                        case 126: // Up Arrow
+                            Task { @MainActor in viewModel.moveUp() }
+                            return nil
+                        case 125: // Down Arrow
+                            Task { @MainActor in viewModel.moveDown() }
+                            return nil
+                        default:
+                            break
+                        }
+                    }
+                    
                     if event.keyCode == 49 { // Space
                         // Avoid interfering with text editing
                         if let _ = NSApp.keyWindow?.firstResponder as? NSTextView {
@@ -108,6 +128,9 @@ public struct MainWindow: View {
                 viewModel.triggerCatalogUpdateCheck()
             }
             .focusedSceneValue(\.isFullScreen, viewModel.isFullScreen)
+            .focusedSceneValue(\.toggleSubView) {
+                viewModel.toggleSubView()
+            }
             .modifier(MainWindowAlerts(viewModel: viewModel))
     }
 
