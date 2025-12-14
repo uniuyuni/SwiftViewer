@@ -23,10 +23,7 @@ struct SwiftViewerApp: App {
             }
             
             CommandMenu("Tools") {
-                Button("Advanced Copy") {
-                    activateOrOpenAdvancedCopy()
-                }
-                .keyboardShortcut("K", modifiers: [.command, .shift])
+                AdvancedCopyMenuButton(action: activateOrOpenAdvancedCopy)
                 
                 Divider()
                 
@@ -80,7 +77,7 @@ struct InspectorToggleMenuButton: View {
         Button("Toggle Inspector") {
             toggleInspector?()
         }
-        .keyboardShortcut("i", modifiers: [.command, .option])
+        .keyboardShortcut("i", modifiers: [])
         .disabled(toggleInspector == nil)
     }
 }
@@ -93,5 +90,18 @@ struct UpdateCatalogMenuButton: View {
             updateCatalog?()
         }
         .disabled(updateCatalog == nil)
+    }
+}
+
+struct AdvancedCopyMenuButton: View {
+    let action: () -> Void
+    @FocusedValue(\.isFullScreen) var isFullScreen
+    
+    var body: some View {
+        Button("Advanced Copy") {
+            action()
+        }
+        .keyboardShortcut("K", modifiers: [.command, .shift])
+        .disabled(isFullScreen == true)
     }
 }

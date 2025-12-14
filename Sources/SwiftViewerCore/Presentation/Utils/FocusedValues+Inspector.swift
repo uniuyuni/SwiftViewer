@@ -18,4 +18,13 @@ public extension FocusedValues {
         get { self[UpdateCatalogKey.self] }
         set { self[UpdateCatalogKey.self] = newValue }
     }
+    
+    var isFullScreen: Bool? {
+        get { self[IsFullScreenKey.self] }
+        set { self[IsFullScreenKey.self] = newValue }
+    }
+}
+
+struct IsFullScreenKey: FocusedValueKey {
+    typealias Value = Bool
 }

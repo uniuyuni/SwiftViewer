@@ -107,6 +107,7 @@ public struct MainWindow: View {
             .focusedSceneValue(\.updateCatalog) {
                 viewModel.triggerCatalogUpdateCheck()
             }
+            .focusedSceneValue(\.isFullScreen, viewModel.isFullScreen)
             .modifier(MainWindowAlerts(viewModel: viewModel))
     }
 
@@ -114,25 +115,37 @@ public struct MainWindow: View {
     
 
     private var splitView: some View {
-        NavigationSplitView(columnVisibility: $viewModel.columnVisibility) {
-            SidebarView(viewModel: viewModel)
-                .navigationSplitViewColumnWidth(min: 150, ideal: 200, max: 400)
-        } detail: {
-            detailContent
+        Group {
+            if viewModel.isFullScreen {
+                detailContent
+            } else {
+                NavigationSplitView(columnVisibility: $viewModel.columnVisibility) {
+                    SidebarView(viewModel: viewModel)
+                        .navigationSplitViewColumnWidth(min: 150, ideal: 200, max: 400)
+                } detail: {
+                    detailContent
+                }
+            }
         }
     }
-
+    
     @ViewBuilder
     private var detailContent: some View {
         HStack(spacing: 0) {
-            PersistentSplitView(
-                autosaveName: "MainSplitView",
-                isVertical: true,
-                hideSecondPane: !viewModel.isPreviewVisible
-            ) {
-                GridView(viewModel: viewModel)
-            } content2: {
+            if viewModel.isFullScreen {
+                // Full Screen Mode: Only Detail View (and Inspector if toggled)
                 DetailView(viewModel: viewModel)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                PersistentSplitView(
+                    autosaveName: "MainSplitView",
+                    isVertical: true,
+                    hideSecondPane: !viewModel.isPreviewVisible
+                ) {
+                    GridView(viewModel: viewModel)
+                } content2: {
+                    DetailView(viewModel: viewModel)
+                }
             }
             
             if viewModel.isInspectorVisible {
@@ -261,6 +274,20 @@ public struct MainWindow: View {
             
         Button("Set Rating 5") { viewModel.setRating(5, for: viewModel.selectedFiles.isEmpty ? (viewModel.currentFile.map { [$0] } ?? []) : Array(viewModel.selectedFiles)) }
             .keyboardShortcut("5", modifiers: [])
+            .hidden()
+            
+        // Full Screen Shortcuts
+        Button("Toggle Full Screen") { viewModel.toggleFullScreen() }
+            .keyboardShortcut("f", modifiers: [])
+            .hidden()
+            
+        Button("Exit Full Screen") { viewModel.exitFullScreen() }
+            .keyboardShortcut(.escape, modifiers: [])
+            .hidden()
+            
+        // Inspector (Local override for Full Screen or consistency)
+        Button("Toggle Inspector Local") { viewModel.toggleInspector() }
+            .keyboardShortcut("i", modifiers: [])
             .hidden()
     }
 }

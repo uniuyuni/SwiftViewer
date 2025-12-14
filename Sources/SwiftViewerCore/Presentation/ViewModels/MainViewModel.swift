@@ -1,6 +1,6 @@
+import Combine
 @preconcurrency import CoreData
 import SwiftUI
-import Combine
 import UniformTypeIdentifiers
 
 extension Notification.Name {
@@ -70,7 +70,7 @@ public class MainViewModel: ObservableObject {
     @Published public var isLoading: Bool = false
     private var metadataTask: Task<Void, Never>?
     private var importTask: Task<Void, Never>?
-    
+
     // Inspector State
     @Published var isInspectorVisible: Bool = false {
         didSet {
@@ -82,6 +82,31 @@ public class MainViewModel: ObservableObject {
 
     // Auto-scroll control
     var isAutoScrollEnabled: Bool = true
+    
+    // Full Screen State
+    @Published var isFullScreen: Bool = false {
+        didSet {
+            // When entering full screen, ensure preview is visible
+            if isFullScreen {
+                isPreviewVisible = true
+            }
+        }
+    }
+    
+    func toggleFullScreen() {
+        if isFullScreen {
+            exitFullScreen()
+        } else {
+            // Only enter full screen if we have a file or selection
+            if currentFile != nil || !selectedFiles.isEmpty {
+                isFullScreen = true
+            }
+        }
+    }
+    
+    func exitFullScreen() {
+        isFullScreen = false
+    }
 
     func toggleInspector() {
         isInspectorVisible.toggle()
@@ -106,22 +131,23 @@ public class MainViewModel: ObservableObject {
             collectionRepository
             ?? CollectionRepository(context: persistenceController.container.viewContext)
         // rootFolders loaded in loadRootFolders()
-        
+
         // Skip ExifTool check in tests to prevent Process execution crashes
-        let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil || inMemory
-        
+        let isTesting =
+            ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil || inMemory
+
         if !isTesting {
             self.isExifToolAvailable = MetadataService.shared.isExifToolAvailable()
         }
 
         loadSettings()
     }
-    
+
     func loadSettings() {
         // Skip in tests
         let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         if isTesting { return }
-        
+
         // Load default sort order
         if let savedSort = UserDefaults.standard.string(forKey: "defaultSortOrder"),
             let order = SortOption(rawValue: savedSort)
@@ -172,33 +198,33 @@ public class MainViewModel: ObservableObject {
                 self?.refreshAll()
             }
         }
-        
+
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didMountNotification, object: nil, queue: .main
         ) { [weak self] notification in
             Logger.shared.log("Device mounted: \(notification.userInfo ?? [:])")
             Task { @MainActor in
                 // Delay to ensure volume is ready
-                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1.0s
+                try? await Task.sleep(nanoseconds: 1_000_000_000)  // 1.0s
                 await self?.loadRootFolders()
                 // Resume thumbnail generation if needed
                 self?.checkForMetadataMismatches()
             }
         }
-        
+
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didUnmountNotification, object: nil, queue: .main
         ) { [weak self] notification in
             Logger.shared.log("Device unmounted: \(notification.userInfo ?? [:])")
             Task { @MainActor in
                 await self?.loadRootFolders()
-                self?.refreshFolders() // Check if current folder is valid
+                self?.refreshFolders()  // Check if current folder is valid
             }
         }
-        
+
         // Setup thumbnailSize persistence
         $thumbnailSize
-            .dropFirst() // Skip initial value
+            .dropFirst()  // Skip initial value
             .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
             .sink { size in
                 UserDefaults.standard.set(size, forKey: "defaultThumbnailSize")
@@ -212,12 +238,12 @@ public class MainViewModel: ObservableObject {
                 self?.handleCoreDataStackChange()
             }
             .store(in: &cancellables)
-            
+
         NotificationCenter.default.publisher(for: .requestNewCatalog)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.createNewCatalog() }
             .store(in: &cancellables)
-            
+
         NotificationCenter.default.publisher(for: .requestOpenCatalog)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.openCatalog() }
@@ -227,70 +253,68 @@ public class MainViewModel: ObservableObject {
     private func handleCoreDataStackChange() {
         // Reload everything related to Core Data, e.g., catalogs and collections
         print("CoreDataStackChanged notification received. Reloading catalogs.")
-        
+
         // Reset state
         self.currentCatalog = nil
         self.fileItems = []
         self.fileItems = []
         self.catalogs = []
-        
+
         // Re-initialize repositories with new context
         let newContext = persistenceController.container.viewContext
         self.mediaRepository = MediaRepository(context: newContext)
         self.collectionRepository = CollectionRepository(context: newContext)
-        
+
         // Reload
         // Load persistent state
         // Load persistent state
         // loadPanePosition() // Not implemented yet or missing
         // loadPanePosition() // Not implemented yet or missing
         loadSavedPhotosLibraries()
-        
+
         // Initial refresh
         refreshFolders()
-        
+
         // If we have a catalog, select it (optional, maybe select first one)
         if let first = catalogs.first {
             selectCatalog(first)
         }
     }
-    
+
     func createNewCatalog() {
         let panel = NSSavePanel()
         panel.title = "Create New Catalog"
         panel.allowedContentTypes = [UTType(filenameExtension: "svdata")!]
         panel.nameFieldStringValue = "New Catalog"
-        
+
         if panel.runModal() == .OK, let url = panel.url {
             CatalogService.shared.createCatalog(at: url)
         }
     }
-    
+
     func openCatalog() {
         let panel = NSOpenPanel()
         panel.title = "Open Catalog"
         panel.allowedContentTypes = [UTType(filenameExtension: "svdata")!]
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
-        
+
         if panel.runModal() == .OK, let url = panel.url {
             CatalogService.shared.openCatalog(at: url)
         }
     }
 
-
-    
     func loadCatalogs() {
         let request: NSFetchRequest<Catalog> = Catalog.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Catalog.name, ascending: true)]
-        
+
         do {
             catalogs = try persistenceController.container.viewContext.fetch(request)
         } catch {
             print("Failed to load catalogs: \(error)")
         }
     }
-    
+
     func selectCatalog(_ catalog: Catalog) {
         currentCatalog = catalog
         loadMediaItems(from: catalog)
@@ -316,10 +340,10 @@ public class MainViewModel: ObservableObject {
         // But we can trigger a view update.
         // But we can trigger a view update.
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2s delay for FS update
+            try? await Task.sleep(nanoseconds: 200_000_000)  // 0.2s delay for FS update
             self.fileSystemRefreshID = UUID()
         }
-        
+
         // Also reload root folders to update their counts
         Task {
             await loadRootFolders()
@@ -343,7 +367,7 @@ public class MainViewModel: ObservableObject {
                 // Refresh Metadata (if viewing a folder in catalog)
                 if let folder = selectedCatalogFolder {
                     // We might need to re-apply filter or reload metadata
-                    applyFilter() 
+                    applyFilter()
                 }
             } else {
                 // Folder Mode
@@ -360,10 +384,10 @@ public class MainViewModel: ObservableObject {
             print("Refreshed all views.")
         }
     }
-    
+
     private func handleAppDidBecomeActive() {
         Logger.shared.log("App became active. Refreshing content based on mode: \(appMode)")
-        
+
         switch appMode {
         case .folders:
             refreshFolders()
@@ -372,7 +396,7 @@ public class MainViewModel: ObservableObject {
                 // Photos Mode active
                 // Just refresh metadata, don't reload catalog items which would overwrite the view
                 Task { await loadMetadataForCurrentFolder() }
-                
+
                 if fileItems.isEmpty {
                     Logger.shared.log("Photos mode active but fileItems empty. Attempting reload.")
                 }
@@ -441,8 +465,8 @@ public class MainViewModel: ObservableObject {
 
         // currentCatalog = nil // Keep catalog selected in sidebar as requested
         currentCollection = nil
-        selectedPhotosGroupID = nil // Clear Photos selection
-        selectedCatalogFolder = nil // Clear Catalog folder selection
+        selectedPhotosGroupID = nil  // Clear Photos selection
+        selectedCatalogFolder = nil  // Clear Catalog folder selection
         selectedFiles.removeAll()
         currentFile = nil
         // Reset filters as requested by user
@@ -452,9 +476,9 @@ public class MainViewModel: ObservableObject {
 
         // Suspend thumbnail generation to prioritize UI/DB for folder loading
         ThumbnailGenerationService.shared.suspend()
-        
+
         loadFiles(in: folder)
-        
+
         // Resume after a short delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             ThumbnailGenerationService.shared.resume()
@@ -464,18 +488,18 @@ public class MainViewModel: ObservableObject {
     public func openCatalog(_ catalog: Catalog) {
         // Clear cache from previous catalog/folder to free memory
         ImageCacheService.shared.clearCache()
-        
+
         // Cancel any running thumbnail generation to prevent freezing/contention
         ThumbnailGenerationService.shared.cancelAll()
 
         metadataTask?.cancel()  // Cancel any running metadata task from folder mode
-        
+
         // NOTE: We do NOT cancel importTask here.
         // If an import is running, it should finish writing to the OLD catalog's DB.
         // The MediaRepository handles checking for cancellation if needed, but for catalog switching,
         // we want the DB import to finish so data isn't lost.
         // Thumbnail generation for the old catalog will be skipped because we called cancelAll().
-        
+
         appMode = .catalog
         currentCatalog = catalog
         saveCurrentCatalogID()  // Save selection
@@ -487,6 +511,8 @@ public class MainViewModel: ObservableObject {
         // Reset filters (Partial: Clear values, keep layout)
         filterCriteria.resetSelections()
         isFilterDisabled = false
+
+        selectedPhotosGroupID = nil  // Clear Photos selection
 
         selectedCatalogFolder = nil  // Reset folder filter
 
@@ -514,7 +540,7 @@ public class MainViewModel: ObservableObject {
         appMode = .catalog
         currentFolder = nil
         currentCollection = nil  // Clear collection selection
-        selectedPhotosGroupID = nil // Clear Photos selection
+        selectedPhotosGroupID = nil  // Clear Photos selection
         if let url = url {
             selectedCatalogFolder = FileItem(url: url, isDirectory: true)
         } else {
@@ -524,7 +550,7 @@ public class MainViewModel: ObservableObject {
         // Reset filters (Partial: Clear values, keep layout)
         filterCriteria.resetSelections()
         isFilterDisabled = false
-        
+
         // Apply filter immediately to show items in selected folder
         applyFilter()
     }
@@ -544,7 +570,7 @@ public class MainViewModel: ObservableObject {
         } else {
             return  // Already importing
         }
-        
+
         // Security Scope Access for App Sandbox
         let access = url.startAccessingSecurityScopedResource()
 
@@ -553,13 +579,13 @@ public class MainViewModel: ObservableObject {
                 if access { url.stopAccessingSecurityScopedResource() }
                 return
             }
-            
+
             // Ensure cleanup happens regardless of success or failure
             defer {
                 if access {
                     url.stopAccessingSecurityScopedResource()
                 }
-                
+
                 Task { @MainActor in
                     // Clear message after delay
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -568,7 +594,7 @@ public class MainViewModel: ObservableObject {
                     }
                 }
             }
-            
+
             do {
                 await MainActor.run {
                     self.importStatusMessage = "Importing..."
@@ -581,7 +607,9 @@ public class MainViewModel: ObservableObject {
 
                 // 2. Import using Repository (background)
                 // Pass folder URL directly, repository handles recursion
-                let importedIDs = try await self.mediaRepository.importMediaItems(from: [url], to: catalogObjectID) { progress in
+                let importedIDs = try await self.mediaRepository.importMediaItems(
+                    from: [url], to: catalogObjectID
+                ) { progress in
                     Task { @MainActor in
                         self.importProgress = progress
                     }
@@ -592,18 +620,21 @@ public class MainViewModel: ObservableObject {
                     if self.currentCatalog?.objectID == catalogObjectID {
                         ThumbnailGenerationService.shared.enqueue(items: importedIDs)
                     } else {
-                        Logger.shared.log("Import finished for previous catalog. Skipping thumbnail generation.")
+                        Logger.shared.log(
+                            "Import finished for previous catalog. Skipping thumbnail generation.")
                     }
                 }
 
                 // 3. Refresh
                 await MainActor.run {
                     // Only refresh catalog items if we are in Catalog Mode AND viewing the same catalog
-                    if self.appMode == .catalog, self.currentCatalog?.id == catalogID, let currentCatalog = self.currentCatalog {
+                    if self.appMode == .catalog, self.currentCatalog?.id == catalogID,
+                        let currentCatalog = self.currentCatalog
+                    {
                         // Ensure we see the latest changes from background context
                         self.persistenceController.container.viewContext.refreshAllObjects()
                         self.loadMediaItems(from: currentCatalog)
-                        
+
                         // Clear isImporting flag
                         currentCatalog.isImporting = false
                         try? self.persistenceController.container.viewContext.save()
@@ -611,24 +642,28 @@ public class MainViewModel: ObservableObject {
                         // If we switched catalogs or are in Folder Mode, we still need to clear the flag for the target catalog
                         let context = self.persistenceController.container.viewContext
                         context.perform {
-                            if let targetCatalog = try? context.existingObject(with: catalogObjectID) as? Catalog {
+                            if let targetCatalog = try? context.existingObject(
+                                with: catalogObjectID) as? Catalog
+                            {
                                 targetCatalog.isImporting = false
                                 try? context.save()
                             }
                         }
-                        
+
                         // If in Folder Mode and viewing the imported folder, refresh it
-                        if self.appMode == .folders, let current = self.currentFolder, current.url == url {
+                        if self.appMode == .folders, let current = self.currentFolder,
+                            current.url == url
+                        {
                             self.loadFiles(in: current)
                         }
                     }
-                    
+
                     // Remove from pending imports AFTER refresh is done
                     if let index = self.pendingImports.firstIndex(of: url) {
                         self.pendingImports.remove(at: index)
                     }
                     self.updateImportState()
-                    
+
                     self.importStatusMessage = "Import complete."
                 }
 
@@ -636,13 +671,13 @@ public class MainViewModel: ObservableObject {
                 print("Failed to import folder: \(error)")
                 await MainActor.run {
                     self.importStatusMessage = "Import failed"
-                    
+
                     // Clear isImporting flag on error
                     if let catalog = self.currentCatalog {
                         catalog.isImporting = false
                         try? self.persistenceController.container.viewContext.save()
                     }
-                    
+
                     // Remove from pending imports
                     if let index = self.pendingImports.firstIndex(of: url) {
                         self.pendingImports.remove(at: index)
@@ -652,7 +687,7 @@ public class MainViewModel: ObservableObject {
             }
         }
     }
-    
+
     func presentImportDialog() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
@@ -660,16 +695,15 @@ public class MainViewModel: ObservableObject {
         panel.canChooseFiles = false
         panel.prompt = "Import"
         panel.message = "Select folders to import into the catalog"
-        
+
         panel.begin { [weak self] response in
             guard let self = self, response == .OK else { return }
-            
+
             for url in panel.urls {
                 self.importFolderToCatalog(url: url)
             }
         }
     }
-
 
     private func updateImportState() {
         isImporting = !pendingImports.isEmpty
@@ -682,7 +716,7 @@ public class MainViewModel: ObservableObject {
 
     func renameFolder(url: URL, newName: String) {
         let newURL = url.deletingLastPathComponent().appendingPathComponent(newName)
-        
+
         // 1. Rename on Disk
         do {
             try FileManager.default.moveItem(at: url, to: newURL)
@@ -690,24 +724,26 @@ public class MainViewModel: ObservableObject {
             Logger.shared.log("Failed to rename folder: \(error)")
             return
         }
-        
+
         // 2. Update Catalog (if applicable)
         Task {
             await updateCatalogPaths(from: url, to: newURL)
             await MainActor.run {
                 // Refresh
                 self.fileSystemRefreshID = UUID()
-                
+
                 // Update current folder if needed
                 if self.appMode == .folders {
                     if let current = self.currentFolder, current.url == url {
                         self.openFolder(FileItem(url: newURL, isDirectory: true))
-                    } else if let current = self.currentFolder, current.url == url.deletingLastPathComponent() {
+                    } else if let current = self.currentFolder,
+                        current.url == url.deletingLastPathComponent()
+                    {
                         // If we renamed a sibling/child in current folder, reload
                         self.loadFiles(in: current)
                     }
                 }
-                
+
                 // Refresh roots
                 let roots = FileSystemService.shared.getRootFolders()
                 self.rootFolders = roots
@@ -725,7 +761,6 @@ public class MainViewModel: ObservableObject {
             }
         }
     }
-
 
     func openCollection(_ collection: Collection) {
         currentCollection = collection
@@ -958,11 +993,11 @@ public class MainViewModel: ObservableObject {
         }
     }
 
-
-
     func applyFilter() {
-        print("DEBUG: applyFilter called. appMode=\(appMode), currentCatalog=\(currentCatalog?.name ?? "nil"), selectedCatalogFolder=\(selectedCatalogFolder?.url.path ?? "nil")")
-        
+        print(
+            "DEBUG: applyFilter called. appMode=\(appMode), currentCatalog=\(currentCatalog?.name ?? "nil"), selectedCatalogFolder=\(selectedCatalogFolder?.url.path ?? "nil")"
+        )
+
         // Track time
         let startTime = Date()
         if let collection = currentCollection {
@@ -979,9 +1014,11 @@ public class MainViewModel: ObservableObject {
                     // Use MediaItem ID for cache linking
                     return FileItem(
                         url: url, isDirectory: false, uuid: item.id ?? UUID(),
-                        colorLabel: item.colorLabel, isFavorite: item.isFavorite, flagStatus: item.flagStatus,
+                        colorLabel: item.colorLabel, isFavorite: item.isFavorite,
+                        flagStatus: item.flagStatus,
                         creationDate: item.captureDate,
-                        modificationDate: item.modifiedDate, fileSize: item.fileSize, orientation: Int(item.orientation))
+                        modificationDate: item.modifiedDate, fileSize: item.fileSize,
+                        orientation: Int(item.orientation))
                 }
                 fileItems = sortItems(mapped)
                 // Also populate metadata cache for these items
@@ -1030,7 +1067,9 @@ public class MainViewModel: ObservableObject {
         } else if appMode == .catalog, currentCatalog != nil {
             // Filter from allMediaItems
             print("DEBUG: Filter enabled. allMediaItems count: \(allMediaItems.count)")
-            print("DEBUG: Checking selectedCatalogFolder: \(selectedCatalogFolder?.url.path ?? "nil")")
+            print(
+                "DEBUG: Checking selectedCatalogFolder: \(selectedCatalogFolder?.url.path ?? "nil")"
+            )
             var items = allMediaItems
 
             // Apply Folder Filter if active
@@ -1041,8 +1080,8 @@ public class MainViewModel: ObservableObject {
                     guard let path = item.originalPath else { return false }
                     let itemFolder = URL(fileURLWithPath: path).deletingLastPathComponent().path
                     let match = itemFolder == folderPath
-                    if !match && items.count < 5 { // Log first few mismatches
-                         print("DEBUG: Mismatch - Item: \(itemFolder) vs Target: \(folderPath)")
+                    if !match && items.count < 5 {  // Log first few mismatches
+                        print("DEBUG: Mismatch - Item: \(itemFolder) vs Target: \(folderPath)")
                     }
                     return match
                 }
@@ -1063,9 +1102,11 @@ public class MainViewModel: ObservableObject {
                 let isAvailable = FileManager.default.fileExists(atPath: path)
                 return FileItem(
                     url: url, isDirectory: false, isAvailable: isAvailable, uuid: item.id ?? UUID(),
-                    colorLabel: item.colorLabel, isFavorite: item.isFavorite, flagStatus: item.flagStatus,
+                    colorLabel: item.colorLabel, isFavorite: item.isFavorite,
+                    flagStatus: item.flagStatus,
                     creationDate: item.captureDate,
-                    modificationDate: item.modifiedDate, fileSize: item.fileSize, orientation: Int(item.orientation))
+                    modificationDate: item.modifiedDate, fileSize: item.fileSize,
+                    orientation: Int(item.orientation))
             }
             fileItems = sortItems(mapped)
 
@@ -1124,8 +1165,6 @@ public class MainViewModel: ObservableObject {
 
     // MARK: - File Operations (Multi-file)
 
-
-
     private func updateCatalogPath(oldURL: URL, newURL: URL) async {
         let context = persistenceController.container.viewContext
         await context.perform {
@@ -1152,22 +1191,26 @@ public class MainViewModel: ObservableObject {
     private func checkAndImportToCatalog(url: URL) async {
         guard let catalog = currentCatalog else { return }
         let catalogID = catalog.objectID
-        
+
         // Only import if the parent folder is already in the catalog
         let parentPath = url.deletingLastPathComponent().standardizedFileURL.path
         let context = persistenceController.container.viewContext
-        
+
         await context.perform {
-            guard let bgCatalog = try? context.existingObject(with: catalogID) as? Catalog else { return }
-            
+            guard let bgCatalog = try? context.existingObject(with: catalogID) as? Catalog else {
+                return
+            }
+
             let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
-            request.predicate = NSPredicate(format: "catalog == %@ AND originalPath == %@", bgCatalog, parentPath)
+            request.predicate = NSPredicate(
+                format: "catalog == %@ AND originalPath == %@", bgCatalog, parentPath)
             request.fetchLimit = 1
-            
+
             if let count = try? context.count(for: request), count > 0 {
                 // Parent exists, safe to import
                 Task {
-                    try? await self.mediaRepository.importMediaItems(from: [url], to: catalogID, progress: nil)
+                    try? await self.mediaRepository.importMediaItems(
+                        from: [url], to: catalogID, progress: nil)
                 }
             }
         }
@@ -1179,9 +1222,13 @@ public class MainViewModel: ObservableObject {
     // See updateRating and updateColorLabel below.
 
     private func filterItems(_ items: [MediaItem]) -> [MediaItem] {
-        print("DEBUG: filterItems called with \(items.count) items. Criteria active: \(filterCriteria.isActive)")
+        print(
+            "DEBUG: filterItems called with \(items.count) items. Criteria active: \(filterCriteria.isActive)"
+        )
         if filterCriteria.isActive {
-             print("DEBUG: Criteria details - minRating: \(filterCriteria.minRating), color: \(filterCriteria.colorLabel ?? "nil"), fav: \(filterCriteria.showOnlyFavorites), flag: \(filterCriteria.flagFilter.rawValue)")
+            print(
+                "DEBUG: Criteria details - minRating: \(filterCriteria.minRating), color: \(filterCriteria.colorLabel ?? "nil"), fav: \(filterCriteria.showOnlyFavorites), flag: \(filterCriteria.flagFilter.rawValue)"
+            )
         }
         return items.filter { item in
             if item.rating < filterCriteria.minRating { return false }
@@ -1193,42 +1240,48 @@ public class MainViewModel: ObservableObject {
                     return false
                 }
             }
-            
+
             // Media Type Filter
             if let path = item.originalPath {
                 let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
                 let isImage = FileConstants.allowedImageExtensions.contains(ext)
                 let isVideo = FileConstants.allowedVideoExtensions.contains(ext)
-                
+
                 if !filterCriteria.showImages && isImage { return false }
                 if !filterCriteria.showVideos && isVideo { return false }
             }
-            
+
             // Favorite Filter
             // Check metadata cache first (Folder Mode support), then item property (Catalog Mode)
             let isFavorite: Bool
-            if let path = item.originalPath, let cached = metadataCache[URL(fileURLWithPath: path).standardizedFileURL], let fav = cached.isFavorite {
+            if let path = item.originalPath,
+                let cached = metadataCache[URL(fileURLWithPath: path).standardizedFileURL],
+                let fav = cached.isFavorite
+            {
                 isFavorite = fav
             } else {
                 isFavorite = item.isFavorite
             }
-            
+
             if filterCriteria.showOnlyFavorites && !isFavorite {
                 return false
             }
-            
+
             // Flag Filter
             let flagStatus: Int
-            if let path = item.originalPath, let cached = metadataCache[URL(fileURLWithPath: path).standardizedFileURL], let flag = cached.flagStatus {
+            if let path = item.originalPath,
+                let cached = metadataCache[URL(fileURLWithPath: path).standardizedFileURL],
+                let flag = cached.flagStatus
+            {
                 flagStatus = flag
             } else {
                 flagStatus = Int(item.flagStatus)
             }
-            
+
             if filterCriteria.flagFilter != .all {
                 switch filterCriteria.flagFilter {
                 case .flagged:
-                    if flagStatus == 0 { return false } // Any flag (Pick or Reject)
+                    if flagStatus == 0 { return false }  // Any flag (Pick or Reject)
                 case .pick:
                     if flagStatus != 1 { return false }
                 case .reject:
@@ -1239,7 +1292,7 @@ public class MainViewModel: ObservableObject {
                     break
                 }
             }
-            
+
             // Attribute Filters
             // We need metadata to filter by attributes. If metadata is missing, we exclude the item if a filter is active.
             let metadata: ExifMetadata?
@@ -1248,23 +1301,28 @@ public class MainViewModel: ObservableObject {
             } else {
                 metadata = nil
             }
-            
+
             if !filterCriteria.selectedMakers.isEmpty {
-                guard let make = metadata?.cameraMake, filterCriteria.selectedMakers.contains(make) else { return false }
+                guard let make = metadata?.cameraMake, filterCriteria.selectedMakers.contains(make)
+                else { return false }
             }
-            
+
             if !filterCriteria.selectedCameras.isEmpty {
-                guard let model = metadata?.cameraModel, filterCriteria.selectedCameras.contains(model) else { return false }
+                guard let model = metadata?.cameraModel,
+                    filterCriteria.selectedCameras.contains(model)
+                else { return false }
             }
-            
+
             if !filterCriteria.selectedLenses.isEmpty {
-                guard let lens = metadata?.lensModel, filterCriteria.selectedLenses.contains(lens) else { return false }
+                guard let lens = metadata?.lensModel, filterCriteria.selectedLenses.contains(lens)
+                else { return false }
             }
-            
+
             if !filterCriteria.selectedISOs.isEmpty {
-                guard let iso = metadata?.iso, filterCriteria.selectedISOs.contains(String(iso)) else { return false }
+                guard let iso = metadata?.iso, filterCriteria.selectedISOs.contains(String(iso))
+                else { return false }
             }
-            
+
             if !filterCriteria.selectedDates.isEmpty {
                 // Date filtering usually works on YYYY-MM-DD or similar. Assuming the set contains formatted date strings.
                 // We need to format the item's date to match.
@@ -1274,7 +1332,7 @@ public class MainViewModel: ObservableObject {
                 let dateString = formatter.string(from: date)
                 if !filterCriteria.selectedDates.contains(dateString) { return false }
             }
-            
+
             if !filterCriteria.selectedFileTypes.isEmpty {
                 let ext: String
                 if let path = item.originalPath {
@@ -1284,11 +1342,13 @@ public class MainViewModel: ObservableObject {
                 }
                 if !filterCriteria.selectedFileTypes.contains(ext) { return false }
             }
-            
+
             if !filterCriteria.selectedShutterSpeeds.isEmpty {
-                guard let speed = metadata?.shutterSpeed, filterCriteria.selectedShutterSpeeds.contains(speed) else { return false }
+                guard let speed = metadata?.shutterSpeed,
+                    filterCriteria.selectedShutterSpeeds.contains(speed)
+                else { return false }
             }
-            
+
             if !filterCriteria.selectedApertures.isEmpty {
                 // Aperture is Double, but filter might be string representation like "f/2.8" or just "2.8"
                 // Assuming the filter set contains strings matching the formatted output
@@ -1296,13 +1356,12 @@ public class MainViewModel: ObservableObject {
                 let apertureString = String(format: "f/%.1f", aperture)
                 if !filterCriteria.selectedApertures.contains(apertureString) { return false }
             }
-            
+
             if !filterCriteria.selectedFocalLengths.isEmpty {
                 guard let focal = metadata?.focalLength else { return false }
                 let focalString = String(format: "%.0f mm", focal)
                 if !filterCriteria.selectedFocalLengths.contains(focalString) { return false }
             }
-
 
             return true
         }
@@ -1373,13 +1432,13 @@ public class MainViewModel: ObservableObject {
             let v2 = parseShutterSpeed(s2)
             return v1 < v2
         }
-        
+
         if metadataCache.values.contains(where: { $0.shutterSpeed == nil }) {
             result.insert("Unknown", at: 0)
         }
         return result
     }
-    
+
     // Helper to parse "1/100", "0.5", "2"" to Double for sorting
     private func parseShutterSpeed(_ s: String) -> Double {
         // Handle "1/X"
@@ -1389,7 +1448,7 @@ public class MainViewModel: ObservableObject {
                 return num / den
             }
         }
-        
+
         // Handle "X"" (seconds)
         if s.hasSuffix("\"") {
             let numStr = s.dropLast()
@@ -1397,12 +1456,12 @@ public class MainViewModel: ObservableObject {
                 return num
             }
         }
-        
+
         // Handle plain number
         if let val = Double(s) {
             return val
         }
-        
+
         return 0
     }
 
@@ -1436,7 +1495,7 @@ public class MainViewModel: ObservableObject {
 
             // Get metadata from cache (for Folders mode overlay support)
             let cachedMeta = metadataCache[item.url]
-            
+
             // Color Label Filter
             if let label = filterCriteria.colorLabel {
                 let itemLabel = cachedMeta?.colorLabel ?? item.colorLabel
@@ -1633,14 +1692,14 @@ public class MainViewModel: ObservableObject {
     @Published var allMediaItems: [MediaItem] = []  // Store all items in catalog
     // MARK: - Photos Library Integration
     @Published var photosLibraries: [PhotosLibrary] = []
-    @Published var photosLibraryGroups: [UUID: [PhotosDateGroup]] = [:] // Library ID -> Groups
-    @Published var expandedPhotosGroups: Set<String> = [] // "LibraryID/DateID"
-    @Published var selectedPhotosGroupID: String? // "LibraryID/DateID"
-    
+    @Published var photosLibraryGroups: [UUID: [PhotosDateGroup]] = [:]  // Library ID -> Groups
+    @Published var expandedPhotosGroups: Set<String> = []  // "LibraryID/DateID"
+    @Published var selectedPhotosGroupID: String?  // "LibraryID/DateID"
+
     var isPhotosMode: Bool {
         return selectedPhotosGroupID != nil
     }
-    
+
     var headerTitle: String {
         if let groupID = selectedPhotosGroupID {
             // Format: "LibraryID/DateID"
@@ -1664,35 +1723,39 @@ public class MainViewModel: ObservableObject {
         }
         return "SwiftViewer"
     }
-    
+
     private let photosLibrariesKey = "SavedPhotosLibraries_v2"
-    
+
     func loadSavedPhotosLibraries() {
         print("Loading saved Photos Libraries...")
         guard let data = UserDefaults.standard.data(forKey: photosLibrariesKey) else {
             print("No saved Photos Libraries found.")
             return
         }
-        
+
         do {
             let savedLibraries = try JSONDecoder().decode([PhotosLibrary].self, from: data)
             var validLibraries: [PhotosLibrary] = []
-            
+
             for var library in savedLibraries {
                 print("Processing saved library: \(library.name)")
                 var isStale = false
                 var url = library.url
-                
+
                 // Try to resolve bookmark if available
                 if let bookmarkData = library.bookmarkData {
                     do {
-                        url = try URL(resolvingBookmarkData: bookmarkData, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale)
+                        url = try URL(
+                            resolvingBookmarkData: bookmarkData, options: .withSecurityScope,
+                            relativeTo: nil, bookmarkDataIsStale: &isStale)
                         print("Resolved bookmark for \(library.name) at \(url.path)")
-                        
+
                         if isStale {
                             print("Bookmark is stale for \(library.name), recreating...")
                             if url.startAccessingSecurityScopedResource() {
-                                library.bookmarkData = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+                                library.bookmarkData = try url.bookmarkData(
+                                    options: .withSecurityScope,
+                                    includingResourceValuesForKeys: nil, relativeTo: nil)
                                 url.stopAccessingSecurityScopedResource()
                             }
                         }
@@ -1701,34 +1764,38 @@ public class MainViewModel: ObservableObject {
                         // Fallback to original URL if resolution fails
                     }
                 }
-                
+
                 // Update library with potentially new URL/Bookmark
-                let updatedLibrary = PhotosLibrary(id: library.id, name: library.name, url: url, bookmarkData: library.bookmarkData)
-                
+                let updatedLibrary = PhotosLibrary(
+                    id: library.id, name: library.name, url: url, bookmarkData: library.bookmarkData
+                )
+
                 // Attempt to access
                 if url.startAccessingSecurityScopedResource() {
                     print("Successfully started accessing \(library.name)")
                     validLibraries.append(updatedLibrary)
                     loadAssets(for: updatedLibrary)
                 } else {
-                    print("Failed to start accessing security scoped resource for \(library.name). Attempting to load anyway (might fail if permissions lost).")
+                    print(
+                        "Failed to start accessing security scoped resource for \(library.name). Attempting to load anyway (might fail if permissions lost)."
+                    )
                     // Add it anyway so the user sees it and maybe we can prompt for permission later
                     validLibraries.append(updatedLibrary)
                     // Try loading assets anyway - maybe we still have access or it's not strictly enforced in some contexts
                     loadAssets(for: updatedLibrary)
                 }
             }
-            
+
             self.photosLibraries = validLibraries
-            self.objectWillChange.send() // Force UI update
-            
+            self.objectWillChange.send()  // Force UI update
+
             // Save updated bookmarks if any changed
             savePhotosLibraries()
         } catch {
             print("Failed to decode saved Photos Libraries: \(error)")
         }
     }
-    
+
     func savePhotosLibraries() {
         print("Saving Photos Libraries: \(photosLibraries.count) libraries")
         do {
@@ -1739,46 +1806,49 @@ public class MainViewModel: ObservableObject {
             print("Failed to encode Photos Libraries: \(error)")
         }
     }
-    
+
     func addPhotosLibrary(url: URL) {
         print("Adding Photos Library at \(url.path)")
-        
+
         // Ensure we have access before creating bookmark
         guard url.startAccessingSecurityScopedResource() else {
             print("Failed to obtain access to Photos Library URL")
             return
         }
         defer { url.stopAccessingSecurityScopedResource() }
-        
+
         var bookmarkData: Data?
         do {
-            bookmarkData = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+            bookmarkData = try url.bookmarkData(
+                options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
             print("Created security scoped bookmark for \(url.lastPathComponent)")
         } catch {
             print("Failed to create bookmark: \(error)")
         }
-        
+
         // Create library instance (bookmarkData might be nil if failed, but we try anyway)
-        let library = PhotosLibrary(name: url.deletingPathExtension().lastPathComponent, url: url, bookmarkData: bookmarkData)
-        
-        // We need to keep accessing it for the session. 
+        let library = PhotosLibrary(
+            name: url.deletingPathExtension().lastPathComponent, url: url,
+            bookmarkData: bookmarkData)
+
+        // We need to keep accessing it for the session.
         // Since we stopAccessing in defer, we need to start again for the long-lived reference?
         // Actually, for the session, we should hold the access.
         // But `addPhotosLibrary` is called from `fileImporter` which grants access temporarily.
         // To persist access across the app session, we should rely on the bookmark resolution or just start accessing again.
-        
-        // Let's re-resolve the bookmark immediately to get a persistent URL reference if possible, 
+
+        // Let's re-resolve the bookmark immediately to get a persistent URL reference if possible,
         // or just start accessing the URL we have (assuming fileImporter gave us permission).
-        
+
         if url.startAccessingSecurityScopedResource() {
             photosLibraries.append(library)
-            savePhotosLibraries() // Persist changes
+            savePhotosLibraries()  // Persist changes
             loadAssets(for: library)
         } else {
             print("Failed to start persistent access for new library")
         }
     }
-    
+
     private func loadAssets(for library: PhotosLibrary) {
         Task {
             do {
@@ -1795,14 +1865,14 @@ public class MainViewModel: ObservableObject {
             }
         }
     }
-    
+
     func removePhotosLibrary(_ library: PhotosLibrary) {
-        library.url.stopAccessingSecurityScopedResource() // Stop accessing
+        library.url.stopAccessingSecurityScopedResource()  // Stop accessing
         photosLibraries.removeAll { $0.id == library.id }
         photosLibraryGroups.removeValue(forKey: library.id)
         savePhotosLibraries()
     }
-    
+
     func togglePhotosGroupExpansion(libraryID: UUID, groupID: String) {
         let key = "\(libraryID.uuidString)/\(groupID)"
         if expandedPhotosGroups.contains(key) {
@@ -1811,10 +1881,10 @@ public class MainViewModel: ObservableObject {
             expandedPhotosGroups.insert(key)
         }
     }
-    
+
     func selectPhotosGroup(_ group: PhotosDateGroup, libraryID: UUID) {
         self.selectedPhotosGroupID = "\(libraryID.uuidString)/\(group.id)"
-        
+
         // Convert PhotosAssets to FileItems
         let items = group.assets.map { asset -> FileItem in
             // Use the original URL (hashed path in originals)
@@ -1823,30 +1893,31 @@ public class MainViewModel: ObservableObject {
             // We might need a way to override display name in FileItem, or just use the file on disk.
             // For now, let's use the file on disk.
             let url = asset.originalURL
-            let item = FileItem(url: url, isDirectory: false, displayName: asset.filename, fileSize: asset.fileSize)
+            let item = FileItem(
+                url: url, isDirectory: false, displayName: asset.filename, fileSize: asset.fileSize)
             // TODO: If we want to show original filename, we need to modify FileItem or wrap it.
             return item
         }
-        
+
         // Apply current sort
         let sortedItems = sortItems(items)
-        
+
         self.fileItems = sortedItems
-        self.allFiles = sortedItems // Update source of truth for filtering
-        self.currentFolder = nil // Deselect current folder
+        self.allFiles = sortedItems  // Update source of truth for filtering
+        self.currentFolder = nil  // Deselect current folder
         self.currentCollection = nil
-        self.selectedCatalogFolder = nil // Clear Catalog folder selection
+        self.selectedCatalogFolder = nil  // Clear Catalog folder selection
         // self.currentCatalog = nil // Keep catalog open as requested by user
-        
+
         // Trigger metadata loading
         Task {
             await loadMetadataForCurrentFolder(items: items.map { $0.url })
         }
-        
+
         // Update UI
         self.objectWillChange.send()
     }
-    
+
     // MARK: - Import
     @Published var isImporting = false
     @Published var importProgress: Double = 0.0
@@ -1878,20 +1949,21 @@ public class MainViewModel: ObservableObject {
                 // Use MediaItem ID for cache linking
                 return FileItem(
                     url: url, isDirectory: false, uuid: item.id ?? UUID(),
-                    colorLabel: item.colorLabel, isFavorite: item.isFavorite, flagStatus: item.flagStatus,
+                    colorLabel: item.colorLabel, isFavorite: item.isFavorite,
+                    flagStatus: item.flagStatus,
                     creationDate: item.importDate,
                     modificationDate: item.modifiedDate, fileSize: item.fileSize,
                     orientation: item.orientation == 0 ? nil : Int(item.orientation))
             }
             fileItems = sortItems(mapped)
-            
+
             // Start background thumbnail pre-fetching
             startBackgroundThumbnailLoading(for: fileItems)
-            
+
             // Resume thumbnail generation if needed
-                // Resume thumbnail generation if needed
-                self.checkForMetadataMismatches()
-            
+            // Resume thumbnail generation if needed
+            self.checkForMetadataMismatches()
+
         } catch {
             print("Failed to load media items: \(error)")
             fileItems = []
@@ -1904,7 +1976,7 @@ public class MainViewModel: ObservableObject {
         guard !folders.isEmpty else { return [] }
 
         // Only show explicitly added folders as roots (or their parents if reconstructed by buildTree).
-        
+
         // Calculate file counts (recursive for each root)
         var fileCounts: [String: Int] = [:]
         for item in allMediaItems {
@@ -1913,7 +1985,7 @@ public class MainViewModel: ObservableObject {
                 // We use the longest matching root to handle nested roots correctly
                 var bestMatch: URL?
                 var maxLen = 0
-                
+
                 for root in folders {
                     if path.hasPrefix(root.path) {
                         if root.path.count > maxLen {
@@ -1922,14 +1994,14 @@ public class MainViewModel: ObservableObject {
                         }
                     }
                 }
-                
+
                 if let match = bestMatch {
                     let key = match.path.lowercased()
                     fileCounts[key, default: 0] += 1
                 }
             }
         }
-        
+
         // Build Hierarchical Tree
         return buildTree(urls: folders, fileCounts: fileCounts)
     }
@@ -1948,15 +2020,17 @@ public class MainViewModel: ObservableObject {
         func toStruct() -> CatalogFolderNode {
             var node = CatalogFolderNode(url: url, fileCount: fileCount)
             if !children.isEmpty {
-                node.children = children.map { $0.toStruct() }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+                node.children = children.map { $0.toStruct() }.sorted {
+                    $0.name.localizedStandardCompare($1.name) == .orderedAscending
+                }
             }
             return node
         }
     }
 
     private func buildTree(urls: [URL], fileCounts: [String: Int]) -> [CatalogFolderNode] {
-        var nodes: [String: NodeBuilder] = [:] // Key: Lowercase Path
-        
+        var nodes: [String: NodeBuilder] = [:]  // Key: Lowercase Path
+
         for url in urls {
             let key = url.path.lowercased()
             nodes[key] = NodeBuilder(url: url, fileCount: fileCounts[key] ?? 0)
@@ -1967,11 +2041,11 @@ public class MainViewModel: ObservableObject {
         for url in urls {
             let key = url.path.lowercased()
             guard let node = nodes[key] else { continue }
-            
+
             let parentURL = url.deletingLastPathComponent()
             let parentKey = parentURL.path.lowercased()
 
-            if let parentNode = nodes[parentKey], parentKey != key { // Ensure we don't parent to self (root)
+            if let parentNode = nodes[parentKey], parentKey != key {  // Ensure we don't parent to self (root)
                 parentNode.children.append(node)
             } else {
                 // If parent is not in our node list, this is a root
@@ -1981,12 +2055,12 @@ public class MainViewModel: ObservableObject {
 
         // Flatten roots: If root is "/" or "/Volumes", replace with children
         var flattenedRoots = roots
-        
+
         var changed = true
         while changed {
             changed = false
             var newRoots: [NodeBuilder] = []
-            
+
             for root in flattenedRoots {
                 let path = root.url.path
                 if path == "/" || path == "/Volumes" {
@@ -2007,19 +2081,20 @@ public class MainViewModel: ObservableObject {
     private func populateMetadataCache(from items: [MediaItem]) {
         // Extract ObjectIDs on MainActor to avoid thread safety issues
         let objectIDs = items.map { $0.objectID }
-        
+
         // Offload to background to avoid blocking Main Thread with Fault firing
         Task.detached(priority: .userInitiated) {
             var newCache: [URL: ExifMetadata] = [:]
-            
+
             let bgContext = PersistenceController.shared.newBackgroundContext()
-            
+
             await bgContext.perform {
                 for id in objectIDs {
                     guard let item = try? bgContext.existingObject(with: id) as? MediaItem,
-                          let path = item.originalPath else { continue }
+                        let path = item.originalPath
+                    else { continue }
                     let url = URL(fileURLWithPath: path)
-                    
+
                     var meta = ExifMetadata()
                     meta.orientation = Int(item.orientation)
                     meta.rating = Int(item.rating)
@@ -2028,7 +2103,7 @@ public class MainViewModel: ObservableObject {
                     meta.width = Int(item.width)
                     meta.height = Int(item.height)
                     meta.colorLabel = item.colorLabel
-                    
+
                     if let exif = item.exifData {
                         meta.cameraMake = exif.cameraMake
                         meta.cameraModel = exif.cameraModel
@@ -2048,11 +2123,11 @@ public class MainViewModel: ObservableObject {
                     newCache[url] = meta
                 }
             }
-            
+
             let finalCache = newCache
             await MainActor.run {
                 self.metadataCache = finalCache
-                self.objectWillChange.send() // Trigger UI update
+                self.objectWillChange.send()  // Trigger UI update
             }
         }
     }
@@ -2102,7 +2177,7 @@ public class MainViewModel: ObservableObject {
     }
 
     private var loadingTask: Task<Void, Never>?
-    
+
     // Internal for testing
     func loadFiles(in folder: FileItem) {
         // Cancel previous task
@@ -2147,13 +2222,14 @@ public class MainViewModel: ObservableObject {
             // Sort in background (now fast due to pre-fetched attributes)
             var sortedFiles = FileSortService.sortFiles(
                 rawFiles, by: currentSortOption, ascending: currentSortAscending)
-            
+
             // Enrich with Catalog Data (Overlay)
             // We do this in background to avoid blocking Main Thread
             // Enrich with Catalog Data (Overlay)
             // We do this in background to avoid blocking Main Thread
             // We do this in background to avoid blocking Main Thread
-            sortedFiles = self.enrichItemsWithCatalogData(sortedFiles, persistenceController: self.persistenceController)
+            sortedFiles = self.enrichItemsWithCatalogData(
+                sortedFiles, persistenceController: self.persistenceController)
             let sortTime = Date()
             Logger.shared.log("DEBUG: Sort took \(sortTime.timeIntervalSince(fsTime))s")
 
@@ -2170,15 +2246,15 @@ public class MainViewModel: ObservableObject {
                 // Note: Filter should preserve order
                 let filtered = self.filterFileItems(self.allFiles)
                 self.fileItems = filtered
-                
+
                 // Apply current sort (just in case filter messed up order, but usually filter preserves)
                 // Actually, we already sorted `allFiles`. `filterFileItems` preserves order.
-                
+
                 let mainEnd = Date()
                 // Logger.shared.log("DEBUG: MainActor update took \(mainEnd.timeIntervalSince(mainStart))s")
-                
+
                 self.isLoading = false
-                
+
                 // Start background metadata loading
                 Task {
                     await self.loadMetadataForCurrentFolder()
@@ -2187,7 +2263,7 @@ public class MainViewModel: ObservableObject {
                 // Start background thumbnail pre-fetching
                 self.startBackgroundThumbnailLoading(for: filtered)
             }
-            }
+        }
 
         // Start monitoring (MainActor is fine for setup, but callback is async)
         FileSystemMonitor.shared.startMonitoring(url: folder.url) { [weak self] in
@@ -2245,59 +2321,62 @@ public class MainViewModel: ObservableObject {
                     }
 
                     // Also, if we want to support "Update Catalog" automatically:
+                }
             }
         }
     }
-    }
-    
+
     /// Enriches FileItems with metadata from the Catalog (Core Data) if available.
     /// This allows "Overlaying" catalog data (Rating, Label, etc.) on top of file system data
     /// when browsing in Folders mode.
     // Internal for testing
-    nonisolated func enrichItemsWithCatalogData(_ items: [FileItem], persistenceController: PersistenceController) -> [FileItem] {
+    nonisolated func enrichItemsWithCatalogData(
+        _ items: [FileItem], persistenceController: PersistenceController
+    ) -> [FileItem] {
         // We need to access Core Data. Since we are in detached task, use newBackgroundContext.
         let context = persistenceController.newBackgroundContext()
         var enrichedItems = items
-        
+
         context.performAndWait {
             // Optimize: Fetch all relevant MediaItems in one go
             // We match by originalPath.
             let paths = items.map { $0.url.path }
             let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
             request.predicate = NSPredicate(format: "originalPath IN %@", paths)
-            
+
             do {
                 let mediaItems = try context.fetch(request)
                 // Create a map for fast lookup
-                let mediaItemMap = Dictionary(uniqueKeysWithValues: mediaItems.compactMap { item -> (String, MediaItem)? in
-                    guard let path = item.originalPath else { return nil }
-                    return (path, item)
-                })
-                
+                let mediaItemMap = Dictionary(
+                    uniqueKeysWithValues: mediaItems.compactMap { item -> (String, MediaItem)? in
+                        guard let path = item.originalPath else { return nil }
+                        return (path, item)
+                    })
+
                 // Update FileItems
                 for i in 0..<enrichedItems.count {
                     let path = enrichedItems[i].url.path
                     if let mediaItem = mediaItemMap[path] {
                         var item = enrichedItems[i]
-                        
+
                         // Overlay Metadata
                         // Rating
                         item.rating = Int(mediaItem.rating)
-                        
+
                         // Label (Color)
                         if let label = mediaItem.colorLabel {
                             item.colorLabel = label
                         }
-                        
+
                         // Favorite
                         item.isFavorite = mediaItem.isFavorite
-                        
+
                         // Flag
                         item.flagStatus = mediaItem.flagStatus
-                        
+
                         // UUID (Link to Catalog Item)
                         item.uuid = mediaItem.id
-                        
+
                         enrichedItems[i] = item
                     }
                 }
@@ -2305,37 +2384,37 @@ public class MainViewModel: ObservableObject {
                 Logger.shared.log("Failed to fetch catalog data for enrichment: \(error)")
             }
         }
-        
+
         return enrichedItems
     }
-    
+
     private var thumbnailLoadingTask: Task<Void, Never>?
-    
+
     private func startBackgroundThumbnailLoading(for items: [FileItem]) {
         thumbnailLoadingTask?.cancel()
-        
+
         let size = CGSize(width: thumbnailSize, height: thumbnailSize)
         // Capture items and size
         thumbnailLoadingTask = Task.detached(priority: .utility) {
             for item in items {
                 if Task.isCancelled { return }
-                
+
                 // Check if already cached (Memory)
                 let key = "\(item.url.path)_\(Int(size.width))x\(Int(size.height))_v4"
                 if ImageCacheService.shared.image(forKey: key) != nil {
                     continue
                 }
-                
+
                 // Generate (will cache automatically)
                 // We don't need the result here, just trigger generation/caching
                 _ = await ThumbnailGenerator.shared.generateThumbnail(for: item.url, size: size)
-                
+
                 // Yield to allow other tasks (like UI scrolling) to take precedence
                 await Task.yield()
             }
         }
     }
-    
+
     func loadRootFolders() async {
         // FileSystemService methods are now nonisolated (synchronous)
         let roots = FileSystemService.shared.getRootFolders()
@@ -2364,8 +2443,6 @@ public class MainViewModel: ObservableObject {
         // Pre-fetch ratings from Core Data to prevent overwrite by empty Exif
         var localRatingsMap: [URL: Int16] = localRatings ?? [:]
 
-
-
         if localRatings == nil {
             let context = persistenceController.newBackgroundContext()
             await context.perform {
@@ -2381,10 +2458,10 @@ public class MainViewModel: ObservableObject {
                 }
             }
         }
-        
+
         // Let's fetch everything into a struct map here.
         var localMetadataMap: [URL: (rating: Int16, isFavorite: Bool, flagStatus: Int16)] = [:]
-        
+
         let context = persistenceController.newBackgroundContext()
         await context.perform {
             let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
@@ -2393,7 +2470,9 @@ public class MainViewModel: ObservableObject {
             if let items = try? context.fetch(request) {
                 for item in items {
                     if let path = item.originalPath {
-                        localMetadataMap[URL(fileURLWithPath: path)] = (item.rating, item.isFavorite, item.flagStatus)
+                        localMetadataMap[URL(fileURLWithPath: path)] = (
+                            item.rating, item.isFavorite, item.flagStatus
+                        )
                     }
                 }
             }
@@ -2483,14 +2562,14 @@ public class MainViewModel: ObservableObject {
                 }
             }
 
-    // MARK: - Thumbnail Service
-    @ObservedObject var thumbnailService = ThumbnailGenerationService.shared
-    
-    var isGeneratingThumbnails: Bool { thumbnailService.isGenerating }
-    var thumbnailProgress: Double { thumbnailService.progress }
-    var thumbnailStatusMessage: String { thumbnailService.statusMessage }
+            // MARK: - Thumbnail Service
+            @ObservedObject var thumbnailService = ThumbnailGenerationService.shared
 
-    // ...
+            var isGeneratingThumbnails: Bool { thumbnailService.isGenerating }
+            var thumbnailProgress: Double { thumbnailService.progress }
+            var thumbnailStatusMessage: String { thumbnailService.statusMessage }
+
+            // ...
 
             // Final batch for others
             let finalBatch = batch
@@ -2508,35 +2587,37 @@ public class MainViewModel: ObservableObject {
             }
         }
     }
-    
+
     // MARK: - Thumbnail Resume
     func checkForMetadataMismatches() {
         guard let catalog = currentCatalog else { return }
         let catalogID = catalog.objectID
-        
+
         Task.detached(priority: .utility) { [weak self] in
             guard let self = self else { return }
             let context = PersistenceController.shared.newBackgroundContext()
-            
+
             var missingIDs: [NSManagedObjectID] = []
-            
+
             await context.perform {
                 let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
                 request.predicate = NSPredicate(format: "catalog == %@", catalogID)
-                
+
                 if let items = try? context.fetch(request) {
                     for item in items {
                         let uuid = item.id ?? UUID()
                         if ThumbnailCacheService.shared.loadThumbnail(for: uuid) == nil {
                             // Check if file is available
-                            if let path = item.originalPath, FileManager.default.fileExists(atPath: path) {
+                            if let path = item.originalPath,
+                                FileManager.default.fileExists(atPath: path)
+                            {
                                 missingIDs.append(item.objectID)
                             }
                         }
                     }
                 }
             }
-            
+
             if !missingIDs.isEmpty {
                 await MainActor.run {
                     ThumbnailGenerationService.shared.enqueue(items: missingIDs)
@@ -2552,7 +2633,8 @@ public class MainViewModel: ObservableObject {
     }
 
     private func sortItems(_ items: [FileItem]) -> [FileItem] {
-        return FileSortService.sortFiles(items, by: sortOption, ascending: isSortAscending, metadataCache: metadataCache)
+        return FileSortService.sortFiles(
+            items, by: sortOption, ascending: isSortAscending, metadataCache: metadataCache)
     }
 
     // Blocking Operation State
@@ -2561,7 +2643,9 @@ public class MainViewModel: ObservableObject {
     @Published var blockingOperationMessage: String = ""
 
     // Async helper for Copy
-    private func performCopyFile(_ item: FileItem, to folderURL: URL, progressHandler: ((Double) -> Void)? = nil) async {
+    private func performCopyFile(
+        _ item: FileItem, to folderURL: URL, progressHandler: ((Double) -> Void)? = nil
+    ) async {
         let srcPath = item.url.standardizedFileURL.path
         let destPath = folderURL.standardizedFileURL.path
         if destPath.hasPrefix(srcPath) {
@@ -2578,10 +2662,14 @@ public class MainViewModel: ObservableObject {
                     // For directories, use recursive copy with progress
                     var currentCount = 0
                     let totalFiles = self.countFiles(at: item.url)
-                    try await self.copyWithProgress(from: item.url, to: destURL, totalItems: totalFiles, currentCount: &currentCount)
+                    try await self.copyWithProgress(
+                        from: item.url, to: destURL, totalItems: totalFiles,
+                        currentCount: &currentCount)
                 } else {
                     // Use chunked copy for progress
-                    try await self.copyFileWithProgress(from: item.url, to: destURL, fileSize: item.fileSize ?? 0, progressHandler: progressHandler)
+                    try await self.copyFileWithProgress(
+                        from: item.url, to: destURL, fileSize: item.fileSize ?? 0,
+                        progressHandler: progressHandler)
                 }
             }.value
             Logger.shared.log("Copied \(item.name) to \(destURL.path)")
@@ -2600,7 +2688,7 @@ public class MainViewModel: ObservableObject {
     @Published var showCopyConfirmation = false
     @Published var copySourceURL: URL?
     @Published var copyDestinationURL: URL?
-    
+
     func requestCopyFolder(from source: URL, to destination: URL) {
         copySourceURL = source
         copyDestinationURL = destination
@@ -2610,7 +2698,7 @@ public class MainViewModel: ObservableObject {
     func confirmCopyFolder() {
         guard let source = copySourceURL, let dest = copyDestinationURL else { return }
         let item = FileItem(url: source, isDirectory: true)
-        
+
         // Check for recursive copy
         let srcPath = source.standardizedFileURL.path
         let destPath = dest.standardizedFileURL.path
@@ -2618,44 +2706,46 @@ public class MainViewModel: ObservableObject {
             Logger.shared.log("Error: Cannot copy folder into itself")
             return
         }
-        
+
         isBlockingOperation = true
         blockingOperationMessage = "Preparing to copy \(item.name)..."
         blockingOperationProgress = -1
-        
+
         Task {
             let totalFiles = await Task.detached { self.countFiles(at: source) }.value
             blockingOperationMessage = "Copying \(item.name) (\(totalFiles) items)..."
             blockingOperationProgress = 0
-            
+
             let destURL = dest.appendingPathComponent(source.lastPathComponent)
-            
+
             do {
                 var currentCount = 0
                 try await Task.detached(priority: .userInitiated) {
-                    try await self.copyWithProgress(from: source, to: destURL, totalItems: totalFiles, currentCount: &currentCount)
+                    try await self.copyWithProgress(
+                        from: source, to: destURL, totalItems: totalFiles,
+                        currentCount: &currentCount)
                 }.value
-                
+
                 Logger.shared.log("Copied \(item.name) to \(destURL.path)")
-                
+
             } catch {
                 await MainActor.run {
                     self.errorMessage = "Failed to copy folder: \(error.localizedDescription)"
                     self.showError = true
                 }
             }
-            
+
             await MainActor.run {
                 self.isBlockingOperation = false
                 self.copySourceURL = nil
                 self.copyDestinationURL = nil
                 self.showCopyConfirmation = false
-                self.fileSystemRefreshID = UUID() // Force refresh
+                self.fileSystemRefreshID = UUID()  // Force refresh
                 NotificationCenter.default.post(name: .refreshFileSystem, object: nil)
             }
         }
     }
-    
+
     // Helper to hold multiple files for copy/move
     var filesToCopy: [FileItem] = []
     var filesToMove: [FileItem] = []
@@ -2666,35 +2756,35 @@ public class MainViewModel: ObservableObject {
         fileOpDestination = destination
         showCopyFilesConfirmation = true
     }
-    
+
     @Published var showCopyFilesConfirmation = false
 
     func confirmCopyFiles() {
         guard let dest = fileOpDestination, !filesToCopy.isEmpty else { return }
         let items = filesToCopy
-        
+
         isBlockingOperation = true
         blockingOperationMessage = "Copying \(items.count) items..."
         blockingOperationProgress = 0
-        
+
         Task { @MainActor in
             var count = 0
             let total = Double(items.count)
-            
+
             for (index, item) in items.enumerated() {
                 self.blockingOperationMessage = "Copying \(item.name)..."
-                
+
                 await performCopyFile(item, to: dest) { fileProgress in
                     let totalProgress = (Double(index) + fileProgress) / total
                     Task { @MainActor in
                         self.blockingOperationProgress = totalProgress
                     }
                 }
-                
+
                 count += 1
                 self.blockingOperationProgress = Double(count) / total
             }
-            
+
             self.isBlockingOperation = false
             self.filesToCopy = []
             self.fileOpDestination = nil
@@ -2704,7 +2794,9 @@ public class MainViewModel: ObservableObject {
     }
 
     // Async helper for Move
-    private func performMoveFile(_ item: FileItem, to folderURL: URL, progressHandler: ((Double) -> Void)? = nil) async {
+    private func performMoveFile(
+        _ item: FileItem, to folderURL: URL, progressHandler: ((Double) -> Void)? = nil
+    ) async {
         let srcPath = item.url.standardizedFileURL.path
         let destPath = folderURL.standardizedFileURL.path
         if destPath.hasPrefix(srcPath) {
@@ -2721,9 +2813,13 @@ public class MainViewModel: ObservableObject {
             // Check volumes
             let srcValues = try? item.url.resourceValues(forKeys: [.volumeIdentifierKey])
             let destValues = try? folderURL.resourceValues(forKeys: [.volumeIdentifierKey])
-            
-            let sameVolume = (srcValues?.volumeIdentifier as? NSObject) != nil && (destValues?.volumeIdentifier as? NSObject) != nil && (srcValues?.volumeIdentifier as? NSObject) == (destValues?.volumeIdentifier as? NSObject)
-            
+
+            let sameVolume =
+                (srcValues?.volumeIdentifier as? NSObject) != nil
+                && (destValues?.volumeIdentifier as? NSObject) != nil
+                && (srcValues?.volumeIdentifier as? NSObject)
+                    == (destValues?.volumeIdentifier as? NSObject)
+
             if sameVolume {
                 // Fast Move (Rename)
                 try await Task.detached(priority: .userInitiated) {
@@ -2737,14 +2833,18 @@ public class MainViewModel: ObservableObject {
                     if item.isDirectory {
                         var currentCount = 0
                         let totalFiles = self.countFiles(at: item.url)
-                        try await self.copyWithProgress(from: item.url, to: destURL, totalItems: totalFiles, currentCount: &currentCount)
+                        try await self.copyWithProgress(
+                            from: item.url, to: destURL, totalItems: totalFiles,
+                            currentCount: &currentCount)
                     } else {
-                        try await self.copyFileWithProgress(from: item.url, to: destURL, fileSize: item.fileSize ?? 0, progressHandler: progressHandler)
+                        try await self.copyFileWithProgress(
+                            from: item.url, to: destURL, fileSize: item.fileSize ?? 0,
+                            progressHandler: progressHandler)
                     }
                     try FileManager.default.removeItem(at: item.url)
                 }.value
             }
-            
+
             Logger.shared.log("Moved \(item.name) to \(destURL.path)")
 
             // 3. Refresh list if we moved out of current folder
@@ -2763,46 +2863,46 @@ public class MainViewModel: ObservableObject {
             await performMoveFile(item, to: folderURL)
         }
     }
-    
+
     func requestMoveFiles(_ items: [FileItem], to destination: URL) {
         filesToMove = items
         fileOpDestination = destination
         showMoveFilesConfirmation = true
     }
-    
+
     @Published var showMoveFilesConfirmation = false
 
     func confirmMoveFiles() {
         guard let dest = fileOpDestination, !filesToMove.isEmpty else { return }
         let items = filesToMove
-        
+
         isBlockingOperation = true
         blockingOperationMessage = "Moving \(items.count) items..."
         blockingOperationProgress = 0
-        
+
         Task { @MainActor in
             var count = 0
             let total = Double(items.count)
-            
+
             for (index, item) in items.enumerated() {
                 self.blockingOperationMessage = "Moving \(item.name)..."
-                
+
                 await performMoveFile(item, to: dest) { fileProgress in
                     let totalProgress = (Double(index) + fileProgress) / total
                     Task { @MainActor in
                         self.blockingOperationProgress = totalProgress
                     }
                 }
-                
+
                 count += 1
                 self.blockingOperationProgress = Double(count) / total
             }
-            
+
             self.isBlockingOperation = false
             self.filesToMove = []
             self.fileOpDestination = nil
             self.showMoveFilesConfirmation = false
-            self.fileSystemRefreshID = UUID() // Force refresh
+            self.fileSystemRefreshID = UUID()  // Force refresh
             NotificationCenter.default.post(name: .refreshFileSystem, object: nil)
         }
     }
@@ -2816,18 +2916,22 @@ public class MainViewModel: ObservableObject {
     func confirmMoveFolder() {
         guard let source = moveSourceURL, let dest = moveDestinationURL else { return }
         let item = FileItem(url: source, isDirectory: true)
-        
+
         isBlockingOperation = true
         blockingOperationMessage = "Preparing to move \(item.name)..."
         blockingOperationProgress = -1
-        
+
         Task {
             // Check volumes
             let srcValues = try? source.resourceValues(forKeys: [.volumeIdentifierKey])
             let destValues = try? dest.resourceValues(forKeys: [.volumeIdentifierKey])
-            
-            let sameVolume = (srcValues?.volumeIdentifier as? NSObject) != nil && (destValues?.volumeIdentifier as? NSObject) != nil && (srcValues?.volumeIdentifier as? NSObject) == (destValues?.volumeIdentifier as? NSObject)
-            
+
+            let sameVolume =
+                (srcValues?.volumeIdentifier as? NSObject) != nil
+                && (destValues?.volumeIdentifier as? NSObject) != nil
+                && (srcValues?.volumeIdentifier as? NSObject)
+                    == (destValues?.volumeIdentifier as? NSObject)
+
             if sameVolume {
                 // Fast Move (Rename)
                 blockingOperationMessage = "Moving \(item.name)..."
@@ -2837,20 +2941,22 @@ public class MainViewModel: ObservableObject {
                 let totalFiles = await Task.detached { self.countFiles(at: source) }.value
                 blockingOperationMessage = "Moving \(item.name) (\(totalFiles) items)..."
                 blockingOperationProgress = 0
-                
+
                 let destURL = dest.appendingPathComponent(source.lastPathComponent)
-                
+
                 do {
                     var currentCount = 0
                     try await Task.detached(priority: .userInitiated) {
-                        try await self.copyWithProgress(from: source, to: destURL, totalItems: totalFiles, currentCount: &currentCount)
+                        try await self.copyWithProgress(
+                            from: source, to: destURL, totalItems: totalFiles,
+                            currentCount: &currentCount)
                     }.value
-                    
+
                     // Delete source after successful copy
                     try FileManager.default.removeItem(at: source)
-                    
+
                     Logger.shared.log("Moved (Copy+Delete) \(item.name) to \(destURL.path)")
-                    
+
                     // Update Catalog if needed (performMoveFile logic handles this, but we did manual copy)
                     // We should replicate the catalog update logic here or extract it.
                     // For now, let's just call the catalog update part?
@@ -2861,29 +2967,29 @@ public class MainViewModel: ObservableObject {
                     // However, for now, let's just rely on the fact that cross-volume move is rare and maybe losing catalog link is acceptable?
                     // NO, user complained about catalog data loss.
                     // So we MUST update catalog.
-                    
+
                     // Let's call the catalog update logic manually.
                     await self.updateCatalogPaths(from: source, to: destURL)
-                    
+
                 } catch {
-                     await MainActor.run {
+                    await MainActor.run {
                         self.errorMessage = "Failed to move folder: \(error.localizedDescription)"
                         self.showError = true
                     }
                 }
             }
-            
+
             await MainActor.run {
                 self.isBlockingOperation = false
                 self.moveSourceURL = nil
                 self.moveDestinationURL = nil
                 self.showMoveConfirmation = false
-                self.fileSystemRefreshID = UUID() // Force refresh
+                self.fileSystemRefreshID = UUID()  // Force refresh
                 NotificationCenter.default.post(name: .refreshFileSystem, object: nil)
             }
         }
     }
-    
+
     func removeFolderFromCatalog(_ folderURL: URL) {
         guard let catalog = currentCatalog else { return }
         let catalogID = catalog.objectID
@@ -2891,51 +2997,54 @@ public class MainViewModel: ObservableObject {
 
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self = self else { return }
-            
+
             let context = self.persistenceController.newBackgroundContext()
-            
+
             // 1. Perform DB operations (Synchronous block inside perform)
             await context.perform {
                 let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
                 guard let ctxCatalog = context.object(with: catalogID) as? Catalog else { return }
-                
-                request.predicate = NSPredicate(format: "catalog == %@ AND originalPath BEGINSWITH %@", ctxCatalog, folderPath)
+
+                request.predicate = NSPredicate(
+                    format: "catalog == %@ AND originalPath BEGINSWITH %@", ctxCatalog, folderPath)
 
                 do {
                     let items = try context.fetch(request)
-                    
+
                     // Cancel generation first
                     let objectIDs = items.map { $0.objectID }
                     ThumbnailGenerationService.shared.cancelGeneration(for: objectIDs)
-                    
+
                     for item in items {
                         // Remove thumbnail
                         let uuid = item.id ?? UUID()
                         ThumbnailCacheService.shared.deleteThumbnail(for: uuid)
-                        
+
                         context.delete(item)
                     }
-                    
+
                     try context.save()
-                    
+
                 } catch {
                     print("Failed to remove folder from catalog: \(error)")
                 }
             }
-            
+
             // 2. UI Updates on MainActor (After DB op is done)
             await MainActor.run {
                 // If current file is in the removed folder, clear it
                 if let current = self.currentFile, current.url.path.hasPrefix(folderPath) {
                     self.currentFile = nil
                 }
-                
+
                 // Refresh catalog view
                 if let currentCatalog = self.currentCatalog, currentCatalog.objectID == catalogID {
                     self.loadMediaItems(from: currentCatalog)
-                    
+
                     // Clear selection if we removed the selected folder or its parent
-                    if let selected = self.selectedCatalogFolder, selected.url.path.hasPrefix(folderPath) {
+                    if let selected = self.selectedCatalogFolder,
+                        selected.url.path.hasPrefix(folderPath)
+                    {
                         self.selectedCatalogFolder = nil
                         self.applyFilter()
                     }
@@ -2949,7 +3058,6 @@ public class MainViewModel: ObservableObject {
     // Let's rely on applyFilter logic we added earlier.
 
     @Published var thumbnailSize: CGFloat = 150
-
 
     @Published var gridColumnsCount: Int = 1
 
@@ -3033,7 +3141,9 @@ public class MainViewModel: ObservableObject {
 
     func updateRating(for item: FileItem, rating: Int) {
         // RAW Restriction: Only allow if in Catalog mode
-        if appMode == .folders && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased()) {
+        if appMode == .folders
+            && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased())
+        {
             Logger.shared.log(
                 "MainViewModel: Skipped rating update for RAW file in Folders mode: \(item.name)")
             return
@@ -3097,7 +3207,7 @@ public class MainViewModel: ObservableObject {
                     )
                 }
             }
-            
+
             // Write to file (XMP/Exif)
             await self.writeMetadataBatch(to: [item.url], rating: rating, label: nil)
 
@@ -3119,10 +3229,12 @@ public class MainViewModel: ObservableObject {
         // 1. Update Metadata Cache (Optimistic) - Skip RAW in Folders mode
         for item in items {
             // In Folders mode, skip RAW files
-            if appMode == .folders && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased()) {
+            if appMode == .folders
+                && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased())
+            {
                 continue
             }
-            
+
             if var meta = metadataCache[item.url] {
                 meta.rating = rating
                 metadataCache[item.url] = meta
@@ -3132,7 +3244,7 @@ public class MainViewModel: ObservableObject {
                 metadataCache[item.url] = meta
             }
         }
-        
+
         // 2. Persist (Async)
         Task {
             // Update Core Data
@@ -3145,24 +3257,28 @@ public class MainViewModel: ObservableObject {
                     } else {
                         request.predicate = NSPredicate(format: "originalPath == %@", item.url.path)
                     }
-                    
-                    if let mediaItems = try? context.fetch(request), let mediaItem = mediaItems.first {
+
+                    if let mediaItems = try? context.fetch(request),
+                        let mediaItem = mediaItems.first
+                    {
                         mediaItem.rating = Int16(rating)
                     }
                 }
                 try? context.save()
             }
-            
+
             // Write to File (Batch) - Filter RAW files in Folders mode
             let editableItems: [FileItem]
             if self.appMode == .folders {
-                editableItems = items.filter { !FileConstants.rawExtensions.contains($0.url.pathExtension.lowercased()) }
+                editableItems = items.filter {
+                    !FileConstants.rawExtensions.contains($0.url.pathExtension.lowercased())
+                }
             } else {
                 editableItems = items
             }
             let urls = editableItems.map { $0.url }
             await self.writeMetadataBatch(to: urls, rating: rating, label: nil)
-            
+
             await MainActor.run {
                 self.applyFilter()
             }
@@ -3171,14 +3287,16 @@ public class MainViewModel: ObservableObject {
 
     func updateColorLabel(for items: [FileItem], label: String?) {
         // Batch update to prevent UI thrashing
-        
+
         // Update Metadata Cache (Optimistic)
         for item in items {
             // In Folders mode, skip RAW files
-            if appMode == .folders && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased()) {
+            if appMode == .folders
+                && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased())
+            {
                 continue
             }
-            
+
             if var meta = metadataCache[item.url] {
                 meta.colorLabel = label
                 metadataCache[item.url] = meta
@@ -3188,18 +3306,20 @@ public class MainViewModel: ObservableObject {
                 metadataCache[item.url] = meta
             }
         }
-        
+
         var updatedItems: [FileItem] = []
-        
+
         // 1. Update allFiles and fileItems
         for item in items {
             // In Folders mode, skip RAW files for in-memory update (they are read-only)
-            if appMode == .folders && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased()) {
+            if appMode == .folders
+                && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased())
+            {
                 continue
             }
-            
+
             var updatedItem: FileItem?
-            
+
             // Update allFiles
             if let index = allFiles.firstIndex(where: { $0.id == item.id }) {
                 var newItem = allFiles[index]
@@ -3208,7 +3328,7 @@ public class MainViewModel: ObservableObject {
                 updatedItems.append(newItem)
                 updatedItem = newItem
             }
-            
+
             // Update fileItems
             if let index = fileItems.firstIndex(where: { $0.id == item.id }) {
                 var newItem = fileItems[index]
@@ -3216,7 +3336,7 @@ public class MainViewModel: ObservableObject {
                 fileItems[index] = newItem
                 if updatedItem == nil { updatedItem = newItem }
             }
-            
+
             // Update selectedFiles
             if let oldItem = selectedFiles.first(where: { $0.id == item.id }) {
                 selectedFiles.remove(oldItem)
@@ -3225,7 +3345,7 @@ public class MainViewModel: ObservableObject {
                 selectedFiles.insert(newItem)
                 if updatedItem == nil { updatedItem = newItem }
             }
-            
+
             // Update currentFile
             if currentFile?.id == item.id {
                 if let updated = updatedItem {
@@ -3236,7 +3356,7 @@ public class MainViewModel: ObservableObject {
                     currentFile = newItem
                 }
             }
-            
+
             // Update Metadata Cache
             if var meta = metadataCache[item.url] {
                 meta.colorLabel = label
@@ -3247,7 +3367,7 @@ public class MainViewModel: ObservableObject {
                 metadataCache[item.url] = meta
             }
         }
-        
+
         // 2. Update selectedFiles (Batch)
         for newItem in updatedItems {
             if let oldSelected = selectedFiles.first(where: { $0.id == newItem.id }) {
@@ -3255,7 +3375,7 @@ public class MainViewModel: ObservableObject {
                 selectedFiles.insert(newItem)
             }
         }
-        
+
         // 3. Persist (Async)
         Task {
             // Update Core Data
@@ -3268,58 +3388,64 @@ public class MainViewModel: ObservableObject {
                     } else {
                         request.predicate = NSPredicate(format: "originalPath == %@", item.url.path)
                     }
-                    
-                    if let mediaItems = try? context.fetch(request), let mediaItem = mediaItems.first {
+
+                    if let mediaItems = try? context.fetch(request),
+                        let mediaItem = mediaItems.first
+                    {
                         mediaItem.colorLabel = label
                     }
                 }
                 try? context.save()
             }
-            
+
             // Write to File (Batch)
             let urls = items.map { $0.url }
             // For label update, we pass rating: nil (preserve rating)
             await self.writeMetadataBatch(to: urls, rating: nil, label: label ?? "")
-            
+
             await MainActor.run {
                 self.applyFilter()
             }
         }
     }
-    
+
     // MARK: - Favorite and Flag Status
-    
+
     func toggleFavorite(for items: [FileItem]) {
         // guard appMode == .catalog else { return } // Allow for non-catalog too (RGB only)
-        
+
         // Determine target state
         // If ALL are favorites -> Turn OFF
         // Otherwise (mixed or all off) -> Turn ON
         // In Folders mode, only consider editable files (non-RAW)
         let editableItems: [FileItem]
         if appMode == .folders {
-            editableItems = items.filter { !FileConstants.rawExtensions.contains($0.url.pathExtension.lowercased()) }
+            editableItems = items.filter {
+                !FileConstants.rawExtensions.contains($0.url.pathExtension.lowercased())
+            }
         } else {
             editableItems = items
         }
-        
+
         // If no editable items, do nothing (or default to false)
         guard !editableItems.isEmpty else { return }
-        
+
         let allFavorites = editableItems.allSatisfy { $0.isFavorite == true }
         let newStatus = !allFavorites
-        
+
         // Batch update allFiles and fileItems
         var updatedItems: [FileItem] = []
-        
+
         for item in items {
             // In Folders mode, skip RAW files for in-memory update (they are read-only)
-            if appMode == .folders && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased()) {
+            if appMode == .folders
+                && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased())
+            {
                 continue
             }
-            
+
             var updatedItem: FileItem?
-            
+
             // Update allFiles
             if let index = allFiles.firstIndex(where: { $0.id == item.id }) {
                 var newItem = allFiles[index]
@@ -3328,7 +3454,7 @@ public class MainViewModel: ObservableObject {
                 updatedItems.append(newItem)
                 updatedItem = newItem
             }
-            
+
             // Update fileItems
             if let index = fileItems.firstIndex(where: { $0.id == item.id }) {
                 var newItem = fileItems[index]
@@ -3336,7 +3462,7 @@ public class MainViewModel: ObservableObject {
                 fileItems[index] = newItem
                 if updatedItem == nil { updatedItem = newItem }
             }
-            
+
             // Update selectedFiles
             if let oldItem = selectedFiles.first(where: { $0.id == item.id }) {
                 selectedFiles.remove(oldItem)
@@ -3345,7 +3471,7 @@ public class MainViewModel: ObservableObject {
                 selectedFiles.insert(newItem)
                 if updatedItem == nil { updatedItem = newItem }
             }
-            
+
             // Update currentFile
             if currentFile?.id == item.id {
                 if let updated = updatedItem {
@@ -3356,7 +3482,7 @@ public class MainViewModel: ObservableObject {
                     currentFile = newItem
                 }
             }
-            
+
             // Update Metadata Cache
             if var meta = metadataCache[item.url] {
                 meta.isFavorite = newStatus
@@ -3367,7 +3493,7 @@ public class MainViewModel: ObservableObject {
                 metadataCache[item.url] = meta
             }
         }
-        
+
         // Update Core Data
         Task.detached(priority: .userInitiated) {
             let context = PersistenceController.shared.container.viewContext
@@ -3379,8 +3505,10 @@ public class MainViewModel: ObservableObject {
                     } else {
                         request.predicate = NSPredicate(format: "originalPath == %@", item.url.path)
                     }
-                    
-                    if let mediaItems = try? context.fetch(request), let mediaItem = mediaItems.first {
+
+                    if let mediaItems = try? context.fetch(request),
+                        let mediaItem = mediaItems.first
+                    {
                         // Toggle logic inside loop to match memory update
                         // But we need to know the NEW status.
                         // Since we iterate, we can't easily batch this if status differs per item.
@@ -3397,12 +3525,12 @@ public class MainViewModel: ObservableObject {
                 }
                 try? context.save()
             }
-            
+
             await MainActor.run {
                 self.applyFilter()
             }
         }
-        
+
         // Persist to File Metadata (XMP/Exif)
         // This handles non-catalog files (RGB) and updates catalog files too.
         // writeMetadataBatch filters out RAWs internally, but we filter here too to be safe and avoid any side effects.
@@ -3411,21 +3539,23 @@ public class MainViewModel: ObservableObject {
             await writeMetadataBatch(to: urls, rating: nil, label: nil, isFavorite: newStatus)
         }
     }
-    
+
     func setFlagStatus(for items: [FileItem], status: Int16) {
         // guard appMode == .catalog else { return } // Allow for non-catalog too (RGB only)
-        
+
         // Batch update allFiles and fileItems
         var updatedItems: [FileItem] = []
-        
+
         for item in items {
             // In Folders mode, skip RAW files for in-memory update (they are read-only)
-            if appMode == .folders && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased()) {
+            if appMode == .folders
+                && FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased())
+            {
                 continue
             }
-            
+
             var updatedItem: FileItem?
-            
+
             // Update allFiles
             if let index = allFiles.firstIndex(where: { $0.id == item.id }) {
                 var newItem = allFiles[index]
@@ -3434,7 +3564,7 @@ public class MainViewModel: ObservableObject {
                 updatedItems.append(newItem)
                 updatedItem = newItem
             }
-            
+
             // Update fileItems
             if let index = fileItems.firstIndex(where: { $0.id == item.id }) {
                 var newItem = fileItems[index]
@@ -3442,7 +3572,7 @@ public class MainViewModel: ObservableObject {
                 fileItems[index] = newItem
                 if updatedItem == nil { updatedItem = newItem }
             }
-            
+
             // Update selectedFiles
             if let oldItem = selectedFiles.first(where: { $0.id == item.id }) {
                 selectedFiles.remove(oldItem)
@@ -3451,7 +3581,7 @@ public class MainViewModel: ObservableObject {
                 selectedFiles.insert(newItem)
                 if updatedItem == nil { updatedItem = newItem }
             }
-            
+
             // Update currentFile
             if currentFile?.id == item.id {
                 if let updated = updatedItem {
@@ -3462,7 +3592,7 @@ public class MainViewModel: ObservableObject {
                     currentFile = newItem
                 }
             }
-            
+
             // Update Metadata Cache
             if var meta = metadataCache[item.url] {
                 meta.flagStatus = Int(status)
@@ -3473,7 +3603,7 @@ public class MainViewModel: ObservableObject {
                 metadataCache[item.url] = meta
             }
         }
-        
+
         // Update Core Data
         Task.detached(priority: .userInitiated) {
             let context = PersistenceController.shared.container.viewContext
@@ -3485,27 +3615,29 @@ public class MainViewModel: ObservableObject {
                     } else {
                         request.predicate = NSPredicate(format: "originalPath == %@", item.url.path)
                     }
-                    
-                    if let mediaItems = try? context.fetch(request), let mediaItem = mediaItems.first {
+
+                    if let mediaItems = try? context.fetch(request),
+                        let mediaItem = mediaItems.first
+                    {
                         mediaItem.flagStatus = status
                         mediaItem.isFlagged = (status != 0)  // Update legacy field
                     }
                 }
                 try? context.save()
             }
-            
+
             await MainActor.run {
                 self.applyFilter()
             }
         }
-        
+
         // Persist to File Metadata (XMP/Exif)
         let urls = items.map { $0.url }
         Task {
             await writeMetadataBatch(to: urls, rating: nil, label: nil, flagStatus: Int(status))
         }
     }
-    
+
     // MARK: - File System Operations
 
     public func setColorLabel(_ label: String?, for items: [FileItem]) {
@@ -3518,7 +3650,6 @@ public class MainViewModel: ObservableObject {
 
     // moveUp/moveDown are already defined around line 2393
     // Removing duplicate definitions here
-
 
     func selectNext() {
         guard let current = currentFile, let index = fileItems.firstIndex(of: current) else {
@@ -3554,19 +3685,21 @@ public class MainViewModel: ObservableObject {
     func regenerateThumbnails(for items: [FileItem]) {
         let uuids = items.map { $0.uuid }
         guard !uuids.isEmpty else { return }
-        
+
         // Fetch ObjectIDs for UUIDs
         let context = persistenceController.newBackgroundContext()
         context.perform {
             let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
             request.predicate = NSPredicate(format: "id IN %@", uuids)
-            
+
             if let mediaItems = try? context.fetch(request) {
                 let objectIDs = mediaItems.map { $0.objectID }
-                
+
                 Task { @MainActor in
                     ThumbnailGenerationService.shared.enqueue(items: objectIDs)
-                    Logger.shared.log("MainViewModel: Enqueued \(objectIDs.count) items for thumbnail regeneration.")
+                    Logger.shared.log(
+                        "MainViewModel: Enqueued \(objectIDs.count) items for thumbnail regeneration."
+                    )
                 }
             }
         }
@@ -3621,7 +3754,9 @@ public class MainViewModel: ObservableObject {
             context.performAndWait {
                 let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
                 if let scope = scope {
-                    request.predicate = NSPredicate(format: "catalog == %@ AND originalPath BEGINSWITH %@", catalogID, scope.path)
+                    request.predicate = NSPredicate(
+                        format: "catalog == %@ AND originalPath BEGINSWITH %@", catalogID,
+                        scope.path)
                 } else {
                     request.predicate = NSPredicate(format: "catalog == %@", catalogID)
                 }
@@ -3630,7 +3765,10 @@ public class MainViewModel: ObservableObject {
                     for item in items {
                         if let path = item.originalPath {
                             let url = URL(fileURLWithPath: path)
-                            dbFiles[url] = (item.modifiedDate, Int(item.rating), item.colorLabel, item.exifData != nil)
+                            dbFiles[url] = (
+                                item.modifiedDate, Int(item.rating), item.colorLabel,
+                                item.exifData != nil
+                            )
                         }
                     }
                 }
@@ -3702,29 +3840,29 @@ public class MainViewModel: ObservableObject {
                             // Treat as updated to force re-read
                             stats.updated.append(url)
                         }
-                        
+
                         // Check Metadata Mismatches
                         // We use ExifTool via ExifReader to ensure we read exactly what we wrote (XMP/IPTC).
                         // CGImageSource (readExifSync) might not read XMP-xmp:Label correctly.
                         // We also enable this for RAW files now that we use ExifTool which is robust.
-                        
+
                         // Use a detached task or just call synchronous ExifTool wrapper?
                         // Since we are already in a detached task, we can call ExifTool synchronously.
                         // But ExifReader.readExifUsingExifTool is private or not exposed?
                         // Let's check ExifReader. It has `readExifBatch` or `readExifUsingExifTool`.
                         // `readExifUsingExifTool` is internal/private.
                         // We should expose a method `readMetadataSync(from: URL)` that tries ExifTool first.
-                        
+
                         // For now, let's use ExifReader.shared.readExifSync(from: url) but we need to improve IT.
                         // Wait, I can't easily change ExifReader to use ExifTool for *everything* inside readExifSync without performance hit.
                         // But for "Check for Updates", accuracy is more important than speed?
                         // Or maybe we should only use ExifTool if it's a candidate for mismatch?
                         // No, we need to know IF it's a mismatch.
-                        
+
                         // Let's rely on `ExifReader.shared.readExifSync` BUT update it to use ExifTool if needed?
                         // Or better: In this loop, we can use `ExifReader.shared.readExifUsingExifTool(from: url)` if I make it public.
                         // Or I can add a new method `readMetadataAccurate(from: url)`.
-                        
+
                         // Actually, let's look at ExifReader again.
                         // ... (comments)
 
@@ -3733,7 +3871,7 @@ public class MainViewModel: ObservableObject {
                         // But my writeMetadataBatch writes XMP to JPGs too!
                         // So CGImageSource reading JPG might miss XMP Label.
                         // I MUST use ExifTool for JPGs too if I want to verify XMP Label.
-                        
+
                         // So, I will modify ExifReader to allow forcing ExifTool, OR I will call ExifTool here directly.
                         // Calling ExifTool for every file in the catalog (even if not modified) is SLOW.
                         // But wait, we only check `if fileDate > dbDate` (line 2763) for UPDATES.
@@ -3748,11 +3886,11 @@ public class MainViewModel: ObservableObject {
                         // If date is same, metadata "should" be same (unless external tool touched it without changing date, which is rare/impossible).
                         // BUT, `writeMetadataBatch` updates file. Does it update DB date?
                         // `performCatalogUpdate` updates DB date.
-                        
+
                         // If I edit in App -> Write File -> Update DB (Date + Metadata).
                         // File Date == DB Date.
                         // So we shouldn't need to check.
-                        
+
                         // But the user says "No matter how much I sync...".
                         // This implies `fileDate` != `dbDate`?
                         // Or maybe the check runs regardless of date?
@@ -3774,34 +3912,34 @@ public class MainViewModel: ObservableObject {
                         // So why check?
                         // Maybe to detect "Metadata changed but date didn't"? (e.g. `touch -m`?)
                         // That's rare.
-                        
+
                         // However, if the user says "Mismatch detected", it means this code IS finding a difference.
                         // If I use `exiftool` here, it will be slow.
                         // But maybe I should only check if `fileDate` is strictly different?
                         // No, the code separates "Updated" (Date changed) vs "Mismatch" (Content diff).
-                        
+
                         // Let's look at the logic again.
                         // If I use `readExifSync` (CGImageSource) on a JPG, and it returns `nil` for Label (because it can't read XMP),
                         // but DB has "Red".
                         // Then `nil != "Red"` -> Mismatch.
                         // This happens even if Date is identical!
-                        
+
                         // So I MUST fix `readExifSync` to read XMP Label correctly for JPGs.
                         // OR I must use ExifTool.
-                        
+
                         // I will modify `ExifReader.swift` to support XMP Label reading via `CGImageSource` (if possible) or fallback.
                         // `CGImageSource` *can* read XMP if we access the `metadata` property of `CGImageSource`?
                         // `CGImageSourceCopyPropertiesAtIndex` returns a dictionary.
                         // `{XMP}` key might contain the raw XMP packet.
                         // Parsing raw XMP is hard.
-                        
+
                         // Alternative: Use `exiftool` but ONLY if `CGImageSource` fails to match DB?
                         // i.e. Double Check Strategy.
                         // If `CGImageSource` says "No Label", but DB says "Red", THEN run `exiftool` to verify if it's really "No Label" or just "Can't read".
                         // This is efficient!
-                        
+
                         // Let's implement this Double Check in `MainViewModel`.
-                        
+
                         if let exif = ExifReader.shared.readExifSync(from: url) {
                             // Skip RAW files for mismatch check (User Request Round 16)
                             // Since RAWs are read-only, catalog metadata (user edits) will naturally differ from file metadata.
@@ -3812,25 +3950,29 @@ public class MainViewModel: ObservableObject {
 
                             let fileRating = exif.rating ?? 0
                             let dbRating = info.rating
-                            
+
                             let fileLabel = exif.colorLabel
                             let dbLabel = info.label
-                            
+
                             if fileRating != dbRating || fileLabel != dbLabel {
                                 // Potential mismatch.
                                 // If fileLabel is nil and dbLabel is not, it might be a read error.
                                 // Verify with ExifTool if needed.
                                 var confirmedMismatch = true
-                                
+
                                 if fileLabel == nil && dbLabel != nil {
                                     // Try ExifTool
-                                    if let accurateExif = ExifReader.shared.readExifUsingExifTool(from: url) {
-                                         if accurateExif.colorLabel == dbLabel && (accurateExif.rating ?? 0) == dbRating {
-                                             confirmedMismatch = false
-                                         }
+                                    if let accurateExif = ExifReader.shared.readExifUsingExifTool(
+                                        from: url)
+                                    {
+                                        if accurateExif.colorLabel == dbLabel
+                                            && (accurateExif.rating ?? 0) == dbRating
+                                        {
+                                            confirmedMismatch = false
+                                        }
                                     }
                                 }
-                                
+
                                 if confirmedMismatch {
                                     stats.metadataMismatches.append(url)
                                 }
@@ -3843,7 +3985,9 @@ public class MainViewModel: ObservableObject {
                     if components.count > 2 && components[1] == "Volumes" {
                         let volumePath = "/" + components[1] + "/" + components[2]
                         var isVolDir: ObjCBool = false
-                        if !fileManager.fileExists(atPath: volumePath, isDirectory: &isVolDir) || !isVolDir.boolValue {
+                        if !fileManager.fileExists(atPath: volumePath, isDirectory: &isVolDir)
+                            || !isVolDir.boolValue
+                        {
                             // Volume unmounted. Ignore.
                             continue
                         }
@@ -3883,8 +4027,6 @@ public class MainViewModel: ObservableObject {
             return stats
         }.value
     }
-
-
 
     func cleanup() {
         FileSystemMonitor.shared.stopMonitoring()
@@ -4012,7 +4154,7 @@ public class MainViewModel: ObservableObject {
         }
         itemsToDelete = []
         showDeleteConfirmation = false
-        
+
         // Refresh to update counts
         refreshFolders()
     }
@@ -4033,12 +4175,10 @@ public class MainViewModel: ObservableObject {
     @Published var showError = false
     @Published var errorMessage = ""
 
-
-
     func deleteFolder(_ url: URL) {
         isBlockingOperation = true
         blockingOperationMessage = "Deleting \(url.lastPathComponent)..."
-        blockingOperationProgress = -1 // Indeterminate
+        blockingOperationProgress = -1  // Indeterminate
 
         Task {
             do {
@@ -4046,7 +4186,7 @@ public class MainViewModel: ObservableObject {
                 try await Task.detached(priority: .userInitiated) {
                     try FileManager.default.removeItem(at: url)
                 }.value
-                
+
                 Logger.shared.log("MainViewModel: Deleted folder \(url.path)")
 
                 await MainActor.run {
@@ -4058,7 +4198,7 @@ public class MainViewModel: ObservableObject {
                             self.currentFolder = nil
                         }
                     }
-                    
+
                     self.isBlockingOperation = false
                     self.fileSystemRefreshID = UUID()
                 }
@@ -4093,18 +4233,18 @@ public class MainViewModel: ObservableObject {
         }
     }
     // MARK: - Catalog Sync Feature
-    
+
     @Published var showUpdateConfirmation = false
     @Published var updateStats: CatalogUpdateStats?
     @Published var catalogToUpdate: Catalog?
     @Published var isSyncingCatalog = false
-    
+
     // Unified check method (called by both Context Menu and Tools Menu)
     func triggerCatalogUpdateCheck(for catalog: Catalog? = nil) {
         let target = catalog ?? currentCatalog
         guard let target = target else { return }
         catalogToUpdate = target
-        
+
         Task {
             let stats = await checkForUpdates(catalog: target)
             await MainActor.run {
@@ -4113,18 +4253,18 @@ public class MainViewModel: ObservableObject {
             }
         }
     }
-    
+
     func optimizeCatalog() {
         guard let catalog = currentCatalog else { return }
         let catalogID = catalog.objectID
-        
+
         Task.detached(priority: .utility) {
             let context = PersistenceController.shared.newBackgroundContext()
             await context.perform {
                 let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
                 request.predicate = NSPredicate(format: "catalog == %@", catalogID)
                 request.propertiesToFetch = ["id"]
-                
+
                 if let items = try? context.fetch(request) {
                     let validUUIDs = Set(items.compactMap { $0.id })
                     ThumbnailCacheService.shared.cleanupOrphanedThumbnails(validUUIDs: validUUIDs)
@@ -4132,21 +4272,23 @@ public class MainViewModel: ObservableObject {
             }
         }
     }
-    
+
     // Legacy method removed or redirected
     // checkForMetadataMismatches is implemented above
-    
+
     // ... (checkForUpdates implementation is fine, but we need to ensure it returns stats)
-    
+
     enum MetadataResolutionStrategy {
         case preferCatalog
         case preferFile
     }
 
-    func performCatalogUpdate(catalog: Catalog, stats: CatalogUpdateStats, strategy: MetadataResolutionStrategy? = nil) {
+    func performCatalogUpdate(
+        catalog: Catalog, stats: CatalogUpdateStats, strategy: MetadataResolutionStrategy? = nil
+    ) {
         guard let context = catalog.managedObjectContext else { return }
         isSyncingCatalog = true
-        
+
         Task {
             // 1. Remove deleted
             if !stats.removed.isEmpty {
@@ -4156,7 +4298,7 @@ public class MainViewModel: ObservableObject {
                         // Check if volume is mounted
                         return self.isVolumeMounted(for: url)
                     }
-                    
+
                     if !filesToDelete.isEmpty {
                         let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
                         request.predicate = NSPredicate(
@@ -4170,7 +4312,7 @@ public class MainViewModel: ObservableObject {
                     }
                 }
             }
-            
+
             // 2. Add new
             if !stats.added.isEmpty {
                 await MainActor.run {
@@ -4181,12 +4323,12 @@ public class MainViewModel: ObservableObject {
                         item.fileName = url.lastPathComponent
                         item.catalog = catalog
                         item.importDate = Date()
-                        
+
                         if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) {
                             item.fileSize = (attrs[.size] as? Int64) ?? 0
                             item.modifiedDate = attrs[.modificationDate] as? Date
                         }
-                        
+
                         // Populate Metadata
                         if let exif = ExifReader.shared.readExifSync(from: url) {
                             item.rating = Int16(exif.rating ?? 0)
@@ -4196,7 +4338,7 @@ public class MainViewModel: ObservableObject {
                             item.orientation = Int16(exif.orientation ?? 1)
                             item.isFavorite = exif.isFavorite ?? false
                             item.flagStatus = Int16(exif.flagStatus ?? 0)
-                            
+
                             // Create ExifData entity
                             let exifData = ExifData(context: context)
                             exifData.cameraMake = exif.cameraMake
@@ -4213,7 +4355,7 @@ public class MainViewModel: ObservableObject {
                             exifData.whiteBalance = exif.whiteBalance
                             exifData.exposureProgram = exif.exposureProgram
                             exifData.exposureCompensation = exif.exposureCompensation ?? 0.0
-                            
+
                             // New Fields
                             exifData.brightnessValue = exif.brightnessValue ?? 0.0
                             exifData.exposureBias = exif.exposureBias ?? 0.0
@@ -4224,16 +4366,16 @@ public class MainViewModel: ObservableObject {
                             exifData.longitude = exif.longitude ?? 0.0
                             exifData.altitude = exif.altitude ?? 0.0
                             exifData.imageDirection = exif.imageDirection ?? 0.0
-                            
+
                             item.exifData = exifData
-                            
+
                             // Update Cache
                             self.metadataCache[url] = exif
                         }
                     }
                 }
             }
-            
+
             // 3. Update existing (File -> DB)
             if !stats.updated.isEmpty {
                 await MainActor.run {
@@ -4241,16 +4383,18 @@ public class MainViewModel: ObservableObject {
                     request.predicate = NSPredicate(
                         format: "catalog == %@ AND originalPath IN %@", catalog,
                         stats.updated.map { $0.path })
-                    
+
                     if let items = try? context.fetch(request) {
                         for item in items {
                             if let path = item.originalPath {
                                 let url = URL(fileURLWithPath: path)
-                                if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) {
+                                if let attrs = try? FileManager.default.attributesOfItem(
+                                    atPath: url.path)
+                                {
                                     item.fileSize = (attrs[.size] as? Int64) ?? 0
                                     item.modifiedDate = attrs[.modificationDate] as? Date
                                 }
-                                
+
                                 // Update Metadata
                                 if let exif = ExifReader.shared.readExifSync(from: url) {
                                     item.rating = Int16(exif.rating ?? 0)
@@ -4260,7 +4404,7 @@ public class MainViewModel: ObservableObject {
                                     item.orientation = Int16(exif.orientation ?? 1)
                                     item.isFavorite = exif.isFavorite ?? false
                                     item.flagStatus = Int16(exif.flagStatus ?? 0)
-                                    
+
                                     // Update or Create ExifData
                                     let exifData = item.exifData ?? ExifData(context: context)
                                     exifData.cameraMake = exif.cameraMake
@@ -4277,7 +4421,7 @@ public class MainViewModel: ObservableObject {
                                     exifData.whiteBalance = exif.whiteBalance
                                     exifData.exposureProgram = exif.exposureProgram
                                     exifData.exposureCompensation = exif.exposureCompensation ?? 0.0
-                                    
+
                                     // New Fields
                                     exifData.brightnessValue = exif.brightnessValue ?? 0.0
                                     exifData.exposureBias = exif.exposureBias ?? 0.0
@@ -4288,9 +4432,9 @@ public class MainViewModel: ObservableObject {
                                     exifData.longitude = exif.longitude ?? 0.0
                                     exifData.altitude = exif.altitude ?? 0.0
                                     exifData.imageDirection = exif.imageDirection ?? 0.0
-                                    
+
                                     item.exifData = exifData
-                                    
+
                                     // Update Cache
                                     self.metadataCache[url] = exif
                                 }
@@ -4299,7 +4443,7 @@ public class MainViewModel: ObservableObject {
                     }
                 }
             }
-            
+
             // 4. Sync Metadata
             if !stats.metadataMismatches.isEmpty, let strategy = strategy {
                 await MainActor.run {
@@ -4307,12 +4451,12 @@ public class MainViewModel: ObservableObject {
                     request.predicate = NSPredicate(
                         format: "catalog == %@ AND originalPath IN %@", catalog,
                         stats.metadataMismatches.map { $0.path })
-                    
+
                     if let items = try? context.fetch(request) {
                         for item in items {
                             guard let path = item.originalPath else { continue }
                             let url = URL(fileURLWithPath: path)
-                            
+
                             switch strategy {
                             case .preferFile:
                                 // Read from File -> DB
@@ -4320,26 +4464,32 @@ public class MainViewModel: ObservableObject {
                                     item.rating = Int16(exif.rating ?? 0)
                                     item.colorLabel = exif.colorLabel
                                     // Update DB modified date to match file
-                                    if let attrs = try? FileManager.default.attributesOfItem(atPath: path) {
+                                    if let attrs = try? FileManager.default.attributesOfItem(
+                                        atPath: path)
+                                    {
                                         item.modifiedDate = attrs[.modificationDate] as? Date
                                     }
                                 }
-                                
+
                             case .preferCatalog:
                                 // Write DB -> File
                                 let rating = Int(item.rating)
                                 let label = item.colorLabel
                                 let isFavorite = item.isFavorite
                                 let flagStatus = Int(item.flagStatus)
-                                
+
                                 // Write to file (non-isolated call)
-                                self.writeMetadata(to: url, rating: rating, label: label, isFavorite: isFavorite, flagStatus: flagStatus)
-                                
+                                self.writeMetadata(
+                                    to: url, rating: rating, label: label, isFavorite: isFavorite,
+                                    flagStatus: flagStatus)
+
                                 // Invalidate cache so UI updates if it re-reads
                                 ExifReader.shared.invalidateCache(for: url)
-                                
+
                                 // Update DB modified date to new file date
-                                if let attrs = try? FileManager.default.attributesOfItem(atPath: path) {
+                                if let attrs = try? FileManager.default.attributesOfItem(
+                                    atPath: path)
+                                {
                                     item.modifiedDate = attrs[.modificationDate] as? Date
                                 }
                             }
@@ -4347,9 +4497,9 @@ public class MainViewModel: ObservableObject {
                     }
                 }
             }
-            
+
             try? context.save()
-            
+
             await MainActor.run {
                 self.isSyncingCatalog = false
                 self.showUpdateConfirmation = false
@@ -4360,18 +4510,21 @@ public class MainViewModel: ObservableObject {
             }
         }
     }
-    
+
     private func isVolumeMounted(for url: URL) -> Bool {
         let components = url.pathComponents
         if components.count > 2 && components[1] == "Volumes" {
             let volumePath = "/" + components[1] + "/" + components[2]
             var isDir: ObjCBool = false
-            return FileManager.default.fileExists(atPath: volumePath, isDirectory: &isDir) && isDir.boolValue
+            return FileManager.default.fileExists(atPath: volumePath, isDirectory: &isDir)
+                && isDir.boolValue
         }
-        return true // Internal drive (always mounted)
+        return true  // Internal drive (always mounted)
     }
-    
-    nonisolated private func writeMetadata(to url: URL, rating: Int, label: String?, isFavorite: Bool? = nil, flagStatus: Int? = nil) {
+
+    nonisolated private func writeMetadata(
+        to url: URL, rating: Int, label: String?, isFavorite: Bool? = nil, flagStatus: Int? = nil
+    ) {
         // Enforce Read-Only for RAW files
         let ext = url.pathExtension.lowercased()
         if FileConstants.rawExtensions.contains(ext) {
@@ -4388,9 +4541,9 @@ public class MainViewModel: ObservableObject {
                 break
             }
         }
-        
+
         var args = ["-overwrite_original"]
-        
+
         // Handle Rating
         if rating > 0 {
             args.append("-Rating=\(rating)")
@@ -4400,13 +4553,13 @@ public class MainViewModel: ObservableObject {
             args.append("-Rating=")
             args.append("-XMP:Rating=")
         }
-        
+
         // Handle Label
         if let label = label, !label.isEmpty {
             args.append("-Label=\(label)")
             args.append("-XMP:Label=\(label)")
             args.append("-XMP-xmp:Label=\(label)")
-            
+
             // Map to Urgency for backward compatibility
             var urgency: Int?
             switch label.lowercased() {
@@ -4419,7 +4572,7 @@ public class MainViewModel: ObservableObject {
             case "gray": urgency = 7
             default: urgency = nil
             }
-            
+
             if let u = urgency {
                 args.append("-Photoshop:Urgency=\(u)")
             }
@@ -4431,7 +4584,7 @@ public class MainViewModel: ObservableObject {
             args.append("-XMP-xmp:Label=")
             args.append("-Photoshop:Urgency=")
         }
-        
+
         // Handle Favorite
         if let isFavorite = isFavorite {
             if isFavorite {
@@ -4442,7 +4595,7 @@ public class MainViewModel: ObservableObject {
                 args.append("-Keywords-=Favorite")
             }
         }
-        
+
         // Handle Flag
         if let flagStatus = flagStatus {
             // Remove old flags
@@ -4450,7 +4603,7 @@ public class MainViewModel: ObservableObject {
             args.append("-Keywords-=Pick")
             args.append("-Subject-=Reject")
             args.append("-Keywords-=Reject")
-            
+
             if flagStatus == 1 {
                 args.append("-Subject+=Pick")
                 args.append("-Keywords+=Pick")
@@ -4459,29 +4612,29 @@ public class MainViewModel: ObservableObject {
                 args.append("-Keywords+=Reject")
             }
         }
-        
+
         Logger.shared.log("ExifTool Writing to \(url.lastPathComponent): \(args)")
-        
+
         args.append(url.path)
-        
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: exifToolPath)
         process.arguments = args
         process.environment = ProcessInfo.processInfo.environment
-        
+
         let pipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = pipe // Capture stderr too
-        
+        process.standardError = pipe  // Capture stderr too
+
         do {
             try process.run()
             process.waitUntilExit()
-            
+
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             if let output = String(data: data, encoding: .utf8), !output.isEmpty {
                 Logger.shared.log("ExifTool Output: \(output)")
             }
-            
+
             // Sync with Finder Tags (Modern replacement for Label)
             if let label = label {
                 var tags: [String] = []
@@ -4496,57 +4649,61 @@ public class MainViewModel: ObservableObject {
                 case "none", "": tags = []
                 default: tags = []
                 }
-                
+
                 var url = url
                 try? (url as NSURL).setResourceValue(tags, forKey: .tagNamesKey)
             }
-            
+
             // Invalidate Cache
             ExifReader.shared.invalidateCache(for: url)
-            
+
         } catch {
             Logger.shared.log("ExifTool Failed: \(error)")
         }
     }
-    
-    nonisolated func writeMetadataBatch(to urls: [URL], rating: Int?, label: String?, isFavorite: Bool? = nil, flagStatus: Int? = nil) async {
+
+    nonisolated func writeMetadataBatch(
+        to urls: [URL], rating: Int?, label: String?, isFavorite: Bool? = nil,
+        flagStatus: Int? = nil
+    ) async {
         guard !urls.isEmpty else { return }
-        
+
         // Set flag to prevent reload
         await MainActor.run {
             self.isUpdatingMetadata = true
         }
-        
+
         // Suspend FileSystemMonitor
         FileSystemMonitor.shared.suspend()
-        
+
         defer {
             Task {
                 // Resume after delay to ensure we catch the event
-                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1.0s
+                try? await Task.sleep(nanoseconds: 1_000_000_000)  // 1.0s
                 FileSystemMonitor.shared.resume()
-                
+
                 await MainActor.run {
                     self.isUpdatingMetadata = false
                 }
             }
         }
-        
+
         // Filter out RAW files
         let safeUrls = urls.filter { url in
             let ext = url.pathExtension.lowercased()
             if FileConstants.rawExtensions.contains(ext) {
-                Logger.shared.log("Skipping ExifTool batch write for RAW file: \(url.lastPathComponent)")
+                Logger.shared.log(
+                    "Skipping ExifTool batch write for RAW file: \(url.lastPathComponent)")
                 return false
             }
             return true
         }
-        
+
         guard !safeUrls.isEmpty else {
             Logger.shared.log("No safe files to write to in batch.")
             return
         }
-        
+
         // Find ExifTool
         let paths = ["/usr/local/bin/exiftool", "/opt/homebrew/bin/exiftool", "/usr/bin/exiftool"]
         var exifToolPath = "/usr/local/bin/exiftool"
@@ -4600,7 +4757,7 @@ public class MainViewModel: ObservableObject {
                 args.append("-Photoshop:Urgency=")
             }
         }
-        
+
         // Handle Favorite
         if let isFavorite = isFavorite {
             if isFavorite {
@@ -4611,7 +4768,7 @@ public class MainViewModel: ObservableObject {
                 args.append("-Keywords-=Favorite")
             }
         }
-        
+
         // Handle Flag
         if let flagStatus = flagStatus {
             // Remove old flags
@@ -4619,7 +4776,7 @@ public class MainViewModel: ObservableObject {
             args.append("-Keywords-=Pick")
             args.append("-Subject-=Reject")
             args.append("-Keywords-=Reject")
-            
+
             if flagStatus == 1 {
                 args.append("-Subject+=Pick")
                 args.append("-Keywords+=Pick")
@@ -4642,7 +4799,7 @@ public class MainViewModel: ObservableObject {
         do {
             try process.run()
             process.waitUntilExit()
-            
+
             // Sync Finder Labels
             // Sync Finder Tags (Only for safeUrls i.e. non-RAW)
             if let label = label {
@@ -4658,14 +4815,14 @@ public class MainViewModel: ObservableObject {
                 case "none", "": tags = []
                 default: tags = []
                 }
-                
+
             }
-            
+
             // Invalidate Cache for ALL safe files, not just if label changed
             for url in safeUrls {
                 ExifReader.shared.invalidateCache(for: url)
             }
-            
+
         } catch {
             Logger.shared.log("ExifTool Batch failed to run: \(error)")
         }
@@ -4676,106 +4833,121 @@ public class MainViewModel: ObservableObject {
     nonisolated private func countFiles(at url: URL) -> Int {
         var count = 0
         // Count both files and directories to ensure progress bar moves for folder structures
-        if let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil) {
+        if let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil)
+        {
             for _ in enumerator {
                 count += 1
             }
         }
         return count
     }
-    
-    nonisolated private func copyWithProgress(from source: URL, to destination: URL, totalItems: Int, currentCount: inout Int) async throws {
+
+    nonisolated private func copyWithProgress(
+        from source: URL, to destination: URL, totalItems: Int, currentCount: inout Int
+    ) async throws {
         let fileManager = FileManager.default
         var isDir: ObjCBool = false
         if fileManager.fileExists(atPath: source.path, isDirectory: &isDir), isDir.boolValue {
             try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
             currentCount += 1
-            
+
             let options: FileManager.DirectoryEnumerationOptions = [.skipsHiddenFiles]
-            let contents = try fileManager.contentsOfDirectory(at: source, includingPropertiesForKeys: nil, options: options)
-            
+            let contents = try fileManager.contentsOfDirectory(
+                at: source, includingPropertiesForKeys: nil, options: options)
+
             for item in contents {
                 let destItem = destination.appendingPathComponent(item.lastPathComponent)
-                try await copyWithProgress(from: item, to: destItem, totalItems: totalItems, currentCount: &currentCount)
+                try await copyWithProgress(
+                    from: item, to: destItem, totalItems: totalItems, currentCount: &currentCount)
             }
         } else {
             // Use chunked copy
-            let count = currentCount // Capture value to avoid inout capture in escaping closure
-            try await copyFileWithProgress(from: source, to: destination, fileSize: 0) { fileProgress in
-                 if totalItems > 0 {
-                     let globalProgress = (Double(count) + fileProgress) / Double(totalItems)
-                     Task { @MainActor in
-                         self.blockingOperationProgress = globalProgress
-                         self.blockingOperationMessage = "Processing \(count) of \(totalItems) items..."
-                     }
-                 }
+            let count = currentCount  // Capture value to avoid inout capture in escaping closure
+            try await copyFileWithProgress(from: source, to: destination, fileSize: 0) {
+                fileProgress in
+                if totalItems > 0 {
+                    let globalProgress = (Double(count) + fileProgress) / Double(totalItems)
+                    Task { @MainActor in
+                        self.blockingOperationProgress = globalProgress
+                        self.blockingOperationMessage =
+                            "Processing \(count) of \(totalItems) items..."
+                    }
+                }
             }
             currentCount += 1
         }
     }
-    
-    nonisolated private func copyFileWithProgress(from source: URL, to destination: URL, fileSize: Int64, progressHandler: ((Double) -> Void)? = nil) async throws {
-        let bufferSize = 1024 * 1024 // 1MB
+
+    nonisolated private func copyFileWithProgress(
+        from source: URL, to destination: URL, fileSize: Int64,
+        progressHandler: ((Double) -> Void)? = nil
+    ) async throws {
+        let bufferSize = 1024 * 1024  // 1MB
         let fileManager = FileManager.default
-        
+
         // Create destination directory if needed (shouldn't be needed for file copy, but safety)
         let destDir = destination.deletingLastPathComponent()
         if !fileManager.fileExists(atPath: destDir.path) {
             try fileManager.createDirectory(at: destDir, withIntermediateDirectories: true)
         }
-        
+
         // Use FileHandle for reading and writing
         let readHandle = try FileHandle(forReadingFrom: source)
         defer { try? readHandle.close() }
-        
+
         // Create empty file
         fileManager.createFile(atPath: destination.path, contents: nil)
         let writeHandle = try FileHandle(forWritingTo: destination)
         defer { try? writeHandle.close() }
-        
+
         var bytesWritten: Int64 = 0
-        let totalBytes = fileSize > 0 ? fileSize : (try? fileManager.attributesOfItem(atPath: source.path)[.size] as? Int64) ?? 0
-        
+        let totalBytes =
+            fileSize > 0
+            ? fileSize
+            : (try? fileManager.attributesOfItem(atPath: source.path)[.size] as? Int64) ?? 0
+
         // Loop
         while true {
             if Task.isCancelled { throw CancellationError() }
-            
+
             let data = try readHandle.read(upToCount: bufferSize)
             guard let data = data, !data.isEmpty else { break }
-            
+
             try writeHandle.write(contentsOf: data)
             bytesWritten += Int64(data.count)
-            
+
             // Update Progress
             if totalBytes > 0 {
                 let progress = Double(bytesWritten) / Double(totalBytes)
                 progressHandler?(progress)
             }
         }
-        
+
         // Copy attributes (creation date, modification date, permissions)
         do {
             let attributes = try fileManager.attributesOfItem(atPath: source.path)
             try fileManager.setAttributes(attributes, ofItemAtPath: destination.path)
         } catch {
-            Logger.shared.log("Warning: Failed to copy attributes for \(source.lastPathComponent): \(error)")
+            Logger.shared.log(
+                "Warning: Failed to copy attributes for \(source.lastPathComponent): \(error)")
         }
     }
-    
+
     // MARK: - Catalog Helpers
-    
+
     private func updateCatalogPaths(from srcURL: URL, to destURL: URL) async {
         let srcPath = srcURL.standardizedFileURL.path
         let context = PersistenceController.shared.newBackgroundContext()
-        
+
         await context.perform {
             let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
-            let predicate = NSPredicate(format: "originalPath == %@ OR originalPath BEGINSWITH %@", srcPath, srcPath + "/")
+            let predicate = NSPredicate(
+                format: "originalPath == %@ OR originalPath BEGINSWITH %@", srcPath, srcPath + "/")
             request.predicate = predicate
-            
+
             if let items = try? context.fetch(request), !items.isEmpty {
                 Logger.shared.log("Catalog Update: Found \(items.count) items for path: \(srcPath)")
-                
+
                 for mediaItem in items {
                     if let oldPath = mediaItem.originalPath {
                         if oldPath == srcPath {
@@ -4787,7 +4959,7 @@ public class MainViewModel: ObservableObject {
                         }
                     }
                 }
-                
+
                 do {
                     try context.save()
                     Logger.shared.log("Catalog Update: Successfully saved new paths.")
@@ -4796,7 +4968,7 @@ public class MainViewModel: ObservableObject {
                 }
             }
         }
-        
+
         // Trigger Catalog Refresh if active
         await MainActor.run { [weak self] in
             guard let self = self else { return }
@@ -4808,7 +4980,5 @@ public class MainViewModel: ObservableObject {
             }
         }
     }
-    
-
 
 }
