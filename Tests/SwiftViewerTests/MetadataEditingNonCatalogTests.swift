@@ -9,6 +9,7 @@ final class MetadataEditingNonCatalogTests: XCTestCase {
     var tempDir: URL!
     
     override func setUpWithError() throws {
+        UserDefaults.standard.removeObject(forKey: "filterCriteria")
         persistenceController = PersistenceController(inMemory: true)
         viewModel = MainViewModel(persistenceController: persistenceController, inMemory: true)
         
@@ -27,7 +28,7 @@ final class MetadataEditingNonCatalogTests: XCTestCase {
     func testToggleFavoriteRGB_NonCatalog() async throws {
         // 1. Create dummy JPG
         let jpgURL = tempDir.appendingPathComponent("test_fav.jpg")
-        try "dummy".write(to: jpgURL, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: jpgURL, options: .atomic)
         let item = FileItem(url: jpgURL, isDirectory: false)
         
         // 2. Toggle Favorite (ON)
@@ -54,7 +55,7 @@ final class MetadataEditingNonCatalogTests: XCTestCase {
     func testToggleFavoriteRAW_NonCatalog() async throws {
         // 1. Create dummy RAW
         let rawURL = tempDir.appendingPathComponent("test_fav.ARW")
-        try "dummy".write(to: rawURL, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: rawURL, options: .atomic)
         let item = FileItem(url: rawURL, isDirectory: false)
         viewModel.fileItems = [item]
         
@@ -87,7 +88,7 @@ final class MetadataEditingNonCatalogTests: XCTestCase {
     func testSetFlagRGB_NonCatalog() async throws {
         // 1. Create dummy JPG
         let jpgURL = tempDir.appendingPathComponent("test_flag.jpg")
-        try "dummy".write(to: jpgURL, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: jpgURL, options: .atomic)
         let item = FileItem(url: jpgURL, isDirectory: false)
         viewModel.fileItems = [item]
         

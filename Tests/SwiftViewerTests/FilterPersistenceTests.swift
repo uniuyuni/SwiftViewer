@@ -10,6 +10,7 @@ final class FilterPersistenceTests: XCTestCase {
     var tempDir: URL!
     
     override func setUpWithError() throws {
+        UserDefaults.standard.removeObject(forKey: "filterCriteria")
         persistenceController = PersistenceController(inMemory: true)
         viewModel = MainViewModel(persistenceController: persistenceController, inMemory: true)
         

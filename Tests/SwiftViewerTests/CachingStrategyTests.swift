@@ -8,6 +8,7 @@ import AppKit
 final class CachingStrategyTests: XCTestCase {
     
     override func setUpWithError() throws {
+        UserDefaults.standard.removeObject(forKey: "filterCriteria")
         // テスト前にキャッシュをクリア
         ImageCacheService.shared.clearCache()
         ThumbnailCacheService.shared.clearCache()

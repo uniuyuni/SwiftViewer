@@ -8,13 +8,16 @@ final class ExifRawTest: XCTestCase {
         let currentDirectory = URL(fileURLWithPath: fileManager.currentDirectoryPath)
         let testfilesURL = currentDirectory.appendingPathComponent("Testfiles")
         
-        // Find a RAF file
-        let rafFile = try fileManager.contentsOfDirectory(at: testfilesURL, includingPropertiesForKeys: nil)
-            .first { $0.pathExtension.lowercased() == "raf" }
+        let rafFile: URL?
+        do {
+            rafFile = try fileManager.contentsOfDirectory(at: testfilesURL, includingPropertiesForKeys: nil)
+                .first { $0.pathExtension.lowercased() == "raf" }
+        } catch {
+            throw XCTSkip("Testfiles directory not found: \(error)")
+        }
         
         guard let file = rafFile else {
-            print("❌ No RAF file found in Testfiles")
-            return
+            throw XCTSkip("No RAF file found in Testfiles")
         }
         
         print("\n=== EXIF RAW JSON DEBUG ===")

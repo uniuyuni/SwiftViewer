@@ -9,6 +9,7 @@ final class MetadataOverlayTests: XCTestCase {
     var tempDir: URL!
     
     override func setUpWithError() throws {
+        UserDefaults.standard.removeObject(forKey: "filterCriteria")
         persistenceController = PersistenceController(inMemory: true)
         viewModel = MainViewModel(persistenceController: persistenceController, inMemory: true)
         
@@ -28,7 +29,7 @@ final class MetadataOverlayTests: XCTestCase {
     func testCatalogOverlayForRAW() async throws {
         // 1. Create dummy RAW file
         let rawURL = tempDir.appendingPathComponent("test_overlay.ARW")
-        try "dummy".write(to: rawURL, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: rawURL, options: .atomic)
         
         // Get canonical URL from FileManager to match what loadFiles will see (handling /var vs /private/var)
         let canonicalURL = try FileManager.default.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil).first { $0.lastPathComponent == "test_overlay.ARW" }!
@@ -44,6 +45,9 @@ final class MetadataOverlayTests: XCTestCase {
         mediaItem.isFavorite = true
         mediaItem.flagStatus = 1
         try context.save()
+        
+        let count = try context.count(for: MediaItem.fetchRequest())
+        print("DEBUG TEST: Items in CoreData viewContext: \(count), Path saved: \(canonicalURL.path)")
         
         // 3. Load Files in Folder (which triggers enrichment)
         // We can't easily call loadFiles directly as it's private and async/detached.
@@ -110,6 +114,9 @@ final class MetadataOverlayTests: XCTestCase {
             return
         }
         
+        print("DEBUG: Loaded Item: \(item.name), colorLabel: \(item.colorLabel ?? "nil"), UUID: \(item.uuid?.uuidString ?? "nil")")
+        print("DEBUG: Cache data: \(viewModel.metadataCache[item.url])")
+        
         // 4. Verify Overlay Data
         XCTAssertEqual(item.colorLabel, "Red", "Label should be overlaid from Catalog")
         XCTAssertEqual(item.rating, 3, "Rating should be overlaid from Catalog")
@@ -121,7 +128,7 @@ final class MetadataOverlayTests: XCTestCase {
     func testCatalogOverlayForRGB() async throws {
         // 1. Create dummy JPG file
         let jpgURL = tempDir.appendingPathComponent("test_overlay.jpg")
-        try "dummy".write(to: jpgURL, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: jpgURL, options: .atomic)
         
         // Get canonical URL
         let canonicalURL = try FileManager.default.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil).first { $0.lastPathComponent == "test_overlay.jpg" }!
@@ -139,9 +146,12 @@ final class MetadataOverlayTests: XCTestCase {
         let folderItem = FileItem(url: tempDir, isDirectory: true)
         viewModel.openFolder(folderItem)
         
-        // Wait
-        for _ in 0..<20 {
-            if !viewModel.fileItems.isEmpty { break }
+        // Wait for files to load AND for metadata to overlay
+        for _ in 0..<30 {
+            if let item = viewModel.fileItems.first(where: { $0.url.lastPathComponent == "test_overlay.jpg" }),
+               item.colorLabel != nil {
+                break
+            }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         
@@ -159,7 +169,7 @@ final class MetadataOverlayTests: XCTestCase {
         let jpgURL = tempDir.appendingPathComponent("test_edit.jpg")
         
         // Use createFile to avoid potential write issues with temp paths
-        let created = FileManager.default.createFile(atPath: jpgURL.path, contents: "dummy".data(using: .utf8), attributes: nil)
+        let created = FileManager.default.createFile(atPath: jpgURL.path, contents: Data(base64Encoded: "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"), attributes: nil)
         if !created {
             XCTFail("Failed to create file at \(jpgURL.path)")
             return

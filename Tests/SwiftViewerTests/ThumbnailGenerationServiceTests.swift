@@ -4,16 +4,21 @@ import CoreData
 
 final class ThumbnailGenerationServiceTests: XCTestCase {
     
-    override func setUp() {
-        super.setUp()
-        ThumbnailGenerationService.shared.cancelAll()
+    override func setUp() async throws {
+        try await super.setUp()
+        await MainActor.run {
+            ThumbnailGenerationService.shared.cancelAll()
+        }
     }
     
-    override func tearDown() {
-        ThumbnailGenerationService.shared.cancelAll()
-        super.tearDown()
+    override func tearDown() async throws {
+        await MainActor.run {
+            ThumbnailGenerationService.shared.cancelAll()
+        }
+        try await super.tearDown()
     }
     
+    @MainActor
     func testProgressLogic() {
         let service = ThumbnailGenerationService.shared
         
@@ -36,6 +41,7 @@ final class ThumbnailGenerationServiceTests: XCTestCase {
         // but we can verify initial state which was the bug (UI not showing).
     }
     
+    @MainActor
     func testResumeLogic() {
         let service = ThumbnailGenerationService.shared
         
@@ -50,9 +56,9 @@ final class ThumbnailGenerationServiceTests: XCTestCase {
         XCTAssertEqual(service.statusMessage, "Generating thumbnails...")
     }
     
-    func testCancellation() {
+    @MainActor
+    func testCancellation() async {
         let service = ThumbnailGenerationService.shared
-        let expectation = XCTestExpectation(description: "Cancellation should stop generation")
         
         // Enqueue items
         let items = [createMediaItem().objectID, createMediaItem().objectID, createMediaItem().objectID]
@@ -62,18 +68,14 @@ final class ThumbnailGenerationServiceTests: XCTestCase {
         service.cancelAll()
         
         // Wait for a short period to allow async tasks to process cancellation
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
-            XCTAssertFalse(service.isGenerating)
-            XCTAssertEqual(service.statusMessage, "Cancelled")
-            XCTAssertEqual(service.remainingCount, 0) // All items should be cleared
-            expectation.fulfill()
-        }
-        
-        wait(for: [expectation], timeout: 1.0)
+        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+        XCTAssertFalse(service.isGenerating)
+        XCTAssertEqual(service.statusMessage, "Cancelled")
+        XCTAssertEqual(service.remainingCount, 0) // All items should be cleared
     }
     
     // Helper
+    @MainActor
     private func createMediaItem() -> MediaItem {
         let context = PersistenceController.shared.container.viewContext
         let item = MediaItem(context: context)
@@ -82,9 +84,9 @@ final class ThumbnailGenerationServiceTests: XCTestCase {
         return item
     }
     
-    func testSuspendResumeLogic() {
+    @MainActor
+    func testSuspendResumeLogic() async {
         let service = ThumbnailGenerationService.shared
-        let expectation = XCTestExpectation(description: "Suspend should pause generation")
         
         // Enqueue items
         let items = [createMediaItem().objectID, createMediaItem().objectID]
@@ -93,26 +95,17 @@ final class ThumbnailGenerationServiceTests: XCTestCase {
         // Suspend immediately
         service.suspend()
         
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
-            // Should be generating but paused loop
-            // Actually, our implementation sets isProcessing=false when suspended in loop
-            // But we can't easily check internal loop state.
-            // We can check if progress stalls?
-            
-            // Resume
-            service.resume()
-            
-            // Wait for resume to take effect
-            for _ in 0..<10 {
-                if service.isGenerating { break }
-                try? await Task.sleep(nanoseconds: 50_000_000) // 0.05s
-            }
-            
-            XCTAssertTrue(service.isGenerating)
-            expectation.fulfill()
+        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+        
+        // Resume
+        service.resume()
+        
+        // Wait for resume to take effect
+        for _ in 0..<10 {
+            if service.isGenerating { break }
+            try? await Task.sleep(nanoseconds: 50_000_000) // 0.05s
         }
         
-        wait(for: [expectation], timeout: 1.0)
+        XCTAssertTrue(service.isGenerating)
     }
 }

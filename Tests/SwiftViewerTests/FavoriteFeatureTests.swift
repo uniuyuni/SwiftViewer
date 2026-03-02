@@ -11,6 +11,7 @@ final class FavoriteFeatureTests: XCTestCase {
     var context: NSManagedObjectContext!
     
     override func setUpWithError() throws {
+        UserDefaults.standard.removeObject(forKey: "filterCriteria")
         persistenceController = PersistenceController(inMemory: true)
         context = persistenceController.container.viewContext
         viewModel = MainViewModel(persistenceController: persistenceController, inMemory: true)
@@ -20,6 +21,7 @@ final class FavoriteFeatureTests: XCTestCase {
         viewModel = nil
         context = nil
         persistenceController = nil
+        UserDefaults.standard.removeObject(forKey: "filterCriteria")
     }
     
     // MARK: - isFavoriteの初期値
@@ -91,8 +93,12 @@ final class FavoriteFeatureTests: XCTestCase {
         viewModel.appMode = .folders
         viewModel.filterCriteria.showOnlyFavorites = false
         viewModel.applyFilter()
+        print("DEBUG: filterCriteria details - minRating=\(viewModel.filterCriteria.minRating), colorLabel=\(String(describing: viewModel.filterCriteria.colorLabel)), showImages=\(viewModel.filterCriteria.showImages), showVideos=\(viewModel.filterCriteria.showVideos), searchText=\(viewModel.filterCriteria.searchText), showOnlyFavorites=\(viewModel.filterCriteria.showOnlyFavorites), flagFilter=\(viewModel.filterCriteria.flagFilter)")
+        print("DEBUG: isActive: \(viewModel.filterCriteria.isActive), fileItems.count: \(viewModel.fileItems.count)")
         
         XCTAssertEqual(viewModel.fileItems.count, 2, "すべて表示")
+
+
     }
     
     func testFilter_ShowOnlyFavorites_WithNilValues() {

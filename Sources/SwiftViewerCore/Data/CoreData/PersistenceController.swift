@@ -8,62 +8,72 @@ public class PersistenceController {
     public var container: NSPersistentContainer
     private var currentStoreURL: URL?
 
+    private static var _cachedModel: NSManagedObjectModel?
+
     public init(inMemory: Bool = false) {
-        // ... (Model loading logic remains same, extracted to helper if possible but keeping inline for now)
-        // We need to load the model from the package bundle
-        // Try .momd first (model bundle)
-        var modelURL = Bundle.module.url(forResource: "SwiftViewer", withExtension: "momd")
+        let finalModel: NSManagedObjectModel
         
-        // Try .mom (single model file)
-        if modelURL == nil {
-            modelURL = Bundle.module.url(forResource: "SwiftViewer", withExtension: "mom")
-        }
-        
-        if modelURL == nil {
-            // Fallback 1: Check for the specific resource bundle in the main bundle (App Bundle case)
-            if let bundleURL = Bundle.main.url(forResource: "SwiftViewer_SwiftViewerCore", withExtension: "bundle"),
-               let bundle = Bundle(url: bundleURL) {
-                modelURL = bundle.url(forResource: "SwiftViewer", withExtension: "momd")
-                if modelURL == nil {
-                    modelURL = bundle.url(forResource: "SwiftViewer", withExtension: "mom")
-                }
-            }
-        }
-        
-        if modelURL == nil {
-            // Fallback 2: Check main bundle directly
-            modelURL = Bundle.main.url(forResource: "SwiftViewer", withExtension: "momd")
+        if let cached = Self._cachedModel {
+            finalModel = cached
+        } else {
+            // We need to load the model from the package bundle
+            // Try .momd first (model bundle)
+            var modelURL = Bundle.module.url(forResource: "SwiftViewer", withExtension: "momd")
+            
+            // Try .mom (single model file)
             if modelURL == nil {
-                modelURL = Bundle.main.url(forResource: "SwiftViewer", withExtension: "mom")
+                modelURL = Bundle.module.url(forResource: "SwiftViewer", withExtension: "mom")
             }
-        }
-        
-        if modelURL == nil {
-            // Fallback 3: Check all bundles
-            for bundle in Bundle.allBundles {
-                if let url = bundle.url(forResource: "SwiftViewer", withExtension: "momd") {
-                    modelURL = url
-                    break
-                }
-                if let url = bundle.url(forResource: "SwiftViewer", withExtension: "mom") {
-                    modelURL = url
-                    break
+            
+            if modelURL == nil {
+                // Fallback 1: Check for the specific resource bundle in the main bundle (App Bundle case)
+                if let bundleURL = Bundle.main.url(forResource: "SwiftViewer_SwiftViewerCore", withExtension: "bundle"),
+                   let bundle = Bundle(url: bundleURL) {
+                    modelURL = bundle.url(forResource: "SwiftViewer", withExtension: "momd")
+                    if modelURL == nil {
+                        modelURL = bundle.url(forResource: "SwiftViewer", withExtension: "mom")
+                    }
                 }
             }
-        }
-        
-        var model: NSManagedObjectModel?
-        if let finalModelURL = modelURL {
-            model = NSManagedObjectModel(contentsOf: finalModelURL)
-        }
-        
-        if model == nil {
-            print("DEBUG: Failed to load model from file. Creating programmatic model.")
-            model = PersistenceController.createProgrammaticModel()
-        }
-        
-        guard let finalModel = model else {
-            fatalError("Failed to create Core Data model")
+            
+            if modelURL == nil {
+                // Fallback 2: Check main bundle directly
+                modelURL = Bundle.main.url(forResource: "SwiftViewer", withExtension: "momd")
+                if modelURL == nil {
+                    modelURL = Bundle.main.url(forResource: "SwiftViewer", withExtension: "mom")
+                }
+            }
+            
+            if modelURL == nil {
+                // Fallback 3: Check all bundles
+                for bundle in Bundle.allBundles {
+                    if let url = bundle.url(forResource: "SwiftViewer", withExtension: "momd") {
+                        modelURL = url
+                        break
+                    }
+                    if let url = bundle.url(forResource: "SwiftViewer", withExtension: "mom") {
+                        modelURL = url
+                        break
+                    }
+                }
+            }
+            
+            var model: NSManagedObjectModel?
+            if let finalURL = modelURL {
+                model = NSManagedObjectModel(contentsOf: finalURL)
+            }
+            
+            if model == nil {
+                print("DEBUG: Failed to load model from file. Creating programmatic model.")
+                model = PersistenceController.createProgrammaticModel()
+            }
+            
+            guard let unwrappedModel = model else {
+                fatalError("Failed to create Core Data model")
+            }
+            
+            finalModel = unwrappedModel
+            Self._cachedModel = finalModel
         }
 
         container = NSPersistentContainer(name: "SwiftViewer", managedObjectModel: finalModel)

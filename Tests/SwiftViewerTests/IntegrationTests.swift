@@ -9,6 +9,7 @@ final class IntegrationTests: XCTestCase {
     var tempDir: URL!
     
     override func setUpWithError() throws {
+        UserDefaults.standard.removeObject(forKey: "filterCriteria")
         persistenceController = PersistenceController(inMemory: true)
         viewModel = MainViewModel(persistenceController: persistenceController, inMemory: true)
         
@@ -52,8 +53,11 @@ final class IntegrationTests: XCTestCase {
         viewModel.openFolder(folderItem)
         
         // Wait for async loading
-        for _ in 0..<20 {
-            if !viewModel.fileItems.isEmpty { break }
+        for _ in 0..<30 {
+            if let item = viewModel.fileItems.first(where: { $0.url.lastPathComponent == "test.jpg" }),
+               item.colorLabel != nil { 
+                break 
+            }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         
@@ -113,9 +117,9 @@ final class IntegrationTests: XCTestCase {
         let jpg2URL = tempDir.appendingPathComponent("test2.jpg")
         let rawURL = tempDir.appendingPathComponent("test.ARW")
         
-        try "dummy".write(to: jpg1URL, atomically: true, encoding: .utf8)
-        try "dummy".write(to: jpg2URL, atomically: true, encoding: .utf8)
-        try "dummy".write(to: rawURL, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: jpg1URL, options: .atomic)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: jpg2URL, options: .atomic)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: rawURL, options: .atomic)
         
         // 2. Load in Folders mode
         viewModel.appMode = .folders
@@ -151,9 +155,9 @@ final class IntegrationTests: XCTestCase {
         let jpg2URL = tempDir.appendingPathComponent("test2.jpg")
         let jpg3URL = tempDir.appendingPathComponent("test3.jpg")
         
-        try "dummy".write(to: jpg1URL, atomically: true, encoding: .utf8)
-        try "dummy".write(to: jpg2URL, atomically: true, encoding: .utf8)
-        try "dummy".write(to: jpg3URL, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: jpg1URL, options: .atomic)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: jpg2URL, options: .atomic)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: jpg3URL, options: .atomic)
         
         // 2. Load in Folders mode
         viewModel.appMode = .folders
@@ -171,9 +175,9 @@ final class IntegrationTests: XCTestCase {
         
         // 4. Verify: All should be updated
         // (Rating updates metadataCache, not FileItem directly)
-        let cache1 = viewModel.metadataCache[jpg1URL]
-        let cache2 = viewModel.metadataCache[jpg2URL]
-        let cache3 = viewModel.metadataCache[jpg3URL]
+        let cache1 = viewModel.metadataCache[jpg1URL.standardizedFileURL]
+        let cache2 = viewModel.metadataCache[jpg2URL.standardizedFileURL]
+        let cache3 = viewModel.metadataCache[jpg3URL.standardizedFileURL]
         
         XCTAssertEqual(cache1?.rating, 5, "JPG1 rating should be 5")
         XCTAssertEqual(cache2?.rating, 5, "JPG2 rating should be 5")
@@ -185,8 +189,8 @@ final class IntegrationTests: XCTestCase {
         let raw1URL = tempDir.appendingPathComponent("test1.ARW")
         let raw2URL = tempDir.appendingPathComponent("test2.ARW")
         
-        try "dummy".write(to: raw1URL, atomically: true, encoding: .utf8)
-        try "dummy".write(to: raw2URL, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: raw1URL, options: .atomic)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: raw2URL, options: .atomic)
         
         // 2. Load in Folders mode
         viewModel.appMode = .folders
@@ -243,7 +247,7 @@ final class IntegrationTests: XCTestCase {
         }
         
         viewModel.updateRating(for: itemA, rating: 4)
-        try? await Task.sleep(nanoseconds: 200_000_000)
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
         
         // 3. Open FolderB, edit metadata
         let folderBItem = FileItem(url: folderB, isDirectory: true)
@@ -260,7 +264,7 @@ final class IntegrationTests: XCTestCase {
         }
         
         viewModel.updateRating(for: itemB, rating: 5)
-        try? await Task.sleep(nanoseconds: 200_000_000)
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
         
         // 4. Return to FolderA, verify rating is preserved
         viewModel.openFolder(folderAItem)
@@ -270,7 +274,9 @@ final class IntegrationTests: XCTestCase {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         
-        let cacheA = viewModel.metadataCache[fileA]
+        // Wait
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        let cacheA = viewModel.metadataCache[fileA.standardizedFileURL]
         XCTAssertEqual(cacheA?.rating, 4, "FolderA rating should be preserved")
     }
 }

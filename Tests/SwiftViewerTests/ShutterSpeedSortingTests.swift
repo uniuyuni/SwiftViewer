@@ -8,6 +8,7 @@ final class ShutterSpeedSortingTests: XCTestCase {
     var persistenceController: PersistenceController!
     
     override func setUpWithError() throws {
+        UserDefaults.standard.removeObject(forKey: "filterCriteria")
         persistenceController = PersistenceController(inMemory: true)
         viewModel = MainViewModel(persistenceController: persistenceController, inMemory: true)
     }

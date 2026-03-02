@@ -7,6 +7,7 @@ final class FileSystemMonitorTests: XCTestCase {
     var monitor: FileSystemMonitor!
     
     override func setUpWithError() throws {
+        UserDefaults.standard.removeObject(forKey: "filterCriteria")
         let tempBase = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempBase, withIntermediateDirectories: true, attributes: nil)
         tempDir = tempBase.resolvingSymlinksInPath()
@@ -34,7 +35,7 @@ final class FileSystemMonitorTests: XCTestCase {
         
         // Create a file while suspended
         let testFile = tempDir.appendingPathComponent("test.txt")
-        try "dummy".write(to: testFile, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: testFile, options: .atomic)
         
         // Wait briefly
         Thread.sleep(forTimeInterval: 0.2)
@@ -57,11 +58,22 @@ final class FileSystemMonitorTests: XCTestCase {
     
     func testMonitorEventFiltering() throws {
         var eventCount = 0
+        let lock = NSLock()
         
         // Start monitoring
         monitor.startMonitoring(url: tempDir) {
+            lock.lock()
             eventCount += 1
+            lock.unlock()
         }
+        
+        // Wait slightly longer to ensure any stray events (from setup or delay) are definitely processed
+        Thread.sleep(forTimeInterval: 0.5)
+        
+        // Reset eventCount immediately before suspending to guarantee clean state
+        lock.lock()
+        eventCount = 0
+        lock.unlock()
         
         // Suspend
         monitor.suspend()
@@ -69,73 +81,91 @@ final class FileSystemMonitorTests: XCTestCase {
         // Create multiple files while suspended
         for i in 0..<3 {
             let testFile = tempDir.appendingPathComponent("test\(i).txt")
-            try "dummy".write(to: testFile, atomically: true, encoding: .utf8)
+            try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: testFile, options: .atomic)
             Thread.sleep(forTimeInterval: 0.1)
         }
         
-        // Wait
-        Thread.sleep(forTimeInterval: 0.2)
+        // Wait longer to ensure any delayed events are ignored while suspended
+        Thread.sleep(forTimeInterval: 1.0)
         
         // No events should fire
-        XCTAssertEqual(eventCount, 0, "No events should fire while suspended")
+        lock.lock()
+        let countWhileSuspended = eventCount
+        lock.unlock()
+        XCTAssertEqual(countWhileSuspended, 0, "No events should fire while suspended")
         
         // Resume
         monitor.resume()
         
         // Create one more file
         let testFile = tempDir.appendingPathComponent("test3.txt")
-        try "dummy".write(to: testFile, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: testFile, options: .atomic)
         
         // Wait
         Thread.sleep(forTimeInterval: 0.3)
         
         // Only one event should fire (after resume)
-        XCTAssertGreaterThanOrEqual(eventCount, 1, "At least one event should fire after resume")
+        lock.lock()
+        let countAfterResume = eventCount
+        lock.unlock()
+        XCTAssertGreaterThanOrEqual(countAfterResume, 1, "At least one event should fire after resume")
     }
     
     // MARK: - Timing
     
-    func testMonitorResumeDelay() async throws {
+    func testMonitorResumeDelay() throws {
         var eventFired = false
+        let lock = NSLock()
+        
+        let expectation = self.expectation(description: "Wait for delayed resume and event")
         
         // Start monitoring
         monitor.startMonitoring(url: tempDir) {
+            lock.lock()
             eventFired = true
+            lock.unlock()
+            expectation.fulfill()
         }
         
         // Suspend
         monitor.suspend()
         
-        // Resume after a delay (simulating writeMetadataBatch behavior)
-        Task {
-            try? await Task.sleep(nanoseconds: 1_000_000_000) // 1.0s
+        // Resume after a delay
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
             self.monitor.resume()
         }
         
         // Create file immediately
         let testFile = tempDir.appendingPathComponent("test.txt")
-        try "dummy".write(to: testFile, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: testFile, options: .atomic)
         
         // Wait 0.5s (before resume)
-        try await Task.sleep(nanoseconds: 500_000_000)
+        Thread.sleep(forTimeInterval: 0.5)
         
         // Event should NOT have fired yet
-        XCTAssertFalse(eventFired, "Event should not fire before resume")
+        lock.lock()
+        let firedBeforeResume = eventFired
+        lock.unlock()
+        XCTAssertFalse(firedBeforeResume, "Event should not fire before resume")
         
-        // Wait another 0.7s (after resume)
-        try await Task.sleep(nanoseconds: 700_000_000)
+        // Wait for the expectation to be fulfilled after resume (timeout after 2.0s)
+        waitForExpectations(timeout: 2.0)
         
-        // Event might fire now (depending on file system timing)
-        // This test mainly verifies no crashes occur with delayed resume
-        XCTAssertTrue(true, "No crash with delayed resume")
+        lock.lock()
+        let finalFired = eventFired
+        lock.unlock()
+        XCTAssertTrue(finalFired, "Event should fire after delayed resume")
     }
     
     func testMonitorEventAfterResume() throws {
         var eventFired = false
+        let lock = NSLock()
         
         // Start monitoring
         monitor.startMonitoring(url: tempDir) {
+            lock.lock()
             eventFired = true
+            lock.unlock()
         }
         
         // Suspend and immediately resume
@@ -144,13 +174,16 @@ final class FileSystemMonitorTests: XCTestCase {
         
         // Create file
         let testFile = tempDir.appendingPathComponent("test.txt")
-        try "dummy".write(to: testFile, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: testFile, options: .atomic)
         
         // Wait
         Thread.sleep(forTimeInterval: 0.3)
         
         // Event should fire
-        XCTAssertTrue(eventFired, "Event should fire after resume")
+        lock.lock()
+        let finalFired = eventFired
+        lock.unlock()
+        XCTAssertTrue(finalFired, "Event should fire after resume")
     }
     
     // MARK: - Thread Safety
@@ -183,7 +216,7 @@ final class FileSystemMonitorTests: XCTestCase {
         
         // Create a file after all operations
         let testFile = tempDir.appendingPathComponent("test.txt")
-        try "dummy".write(to: testFile, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: testFile, options: .atomic)
         
         // Wait
         Thread.sleep(forTimeInterval: 0.3)
@@ -194,10 +227,13 @@ final class FileSystemMonitorTests: XCTestCase {
     
     func testMultipleSuspendResume() throws {
         var eventFired = false
+        let lock = NSLock()
         
         // Start monitoring
         monitor.startMonitoring(url: tempDir) {
+            lock.lock()
             eventFired = true
+            lock.unlock()
         }
         
         // Multiple suspend calls
@@ -207,13 +243,16 @@ final class FileSystemMonitorTests: XCTestCase {
         
         // Create file
         let testFile = tempDir.appendingPathComponent("test.txt")
-        try "dummy".write(to: testFile, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: testFile, options: .atomic)
         
         // Wait
         Thread.sleep(forTimeInterval: 0.2)
         
         // Event should not fire
-        XCTAssertFalse(eventFired, "Event should not fire with multiple suspends")
+        lock.lock()
+        let firedWhileSuspended = eventFired
+        lock.unlock()
+        XCTAssertFalse(firedWhileSuspended, "Event should not fire with multiple suspends")
         
         // Multiple resume calls
         monitor.resume()
@@ -227,7 +266,10 @@ final class FileSystemMonitorTests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.3)
         
         // Event should fire
-        XCTAssertTrue(eventFired, "Event should fire after multiple resumes")
+        lock.lock()
+        let firedAfterResume = eventFired
+        lock.unlock()
+        XCTAssertTrue(firedAfterResume, "Event should fire after multiple resumes")
     }
     
     // MARK: - Edge Cases
@@ -248,10 +290,13 @@ final class FileSystemMonitorTests: XCTestCase {
     
     func testResumeWithoutSuspend() throws {
         var eventFired = false
+        let lock = NSLock()
         
         // Start monitoring
         monitor.startMonitoring(url: tempDir) {
+            lock.lock()
             eventFired = true
+            lock.unlock()
         }
         
         // Resume without suspend
@@ -259,12 +304,15 @@ final class FileSystemMonitorTests: XCTestCase {
         
         // Create file
         let testFile = tempDir.appendingPathComponent("test.txt")
-        try "dummy".write(to: testFile, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: testFile, options: .atomic)
         
         // Wait
         Thread.sleep(forTimeInterval: 0.3)
         
         // Event should still fire
-        XCTAssertTrue(eventFired, "Event should fire even with resume-before-suspend")
+        lock.lock()
+        let finalFired = eventFired
+        lock.unlock()
+        XCTAssertTrue(finalFired, "Event should fire even with resume-before-suspend")
     }
 }

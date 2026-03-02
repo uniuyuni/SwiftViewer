@@ -5,19 +5,7 @@ struct FolderNodeView: View {
     let folder: FileItem
     @ObservedObject var viewModel: MainViewModel
     
-    // Use a binding to the set in ViewModel
-    var isExpanded: Binding<Bool> {
-        Binding(
-            get: { viewModel.expandedFolders.contains(folder.url.path) },
-            set: { isExpanded in
-                if isExpanded {
-                    viewModel.expandedFolders.insert(folder.url.path)
-                } else {
-                    viewModel.expandedFolders.remove(folder.url.path)
-                }
-            }
-        )
-    }
+    @State private var isExpanded: Bool = false
     
     @State private var subfolders: [FileItem]? = nil
     
@@ -31,7 +19,7 @@ struct FolderNodeView: View {
     @State private var showDeleteAlert = false
     
     var body: some View {
-        DisclosureGroup(isExpanded: isExpanded) {
+        DisclosureGroup(isExpanded: $isExpanded) {
             if let subfolders = subfolders {
                 ForEach(subfolders) { subfolder in
                     FolderNodeView(folder: subfolder, viewModel: viewModel)
@@ -96,7 +84,7 @@ struct FolderNodeView: View {
                     if !newSubFolderName.isEmpty {
                         viewModel.createFolder(at: folder.url, name: newSubFolderName)
                         // Expand to show new folder
-                        isExpanded.wrappedValue = true
+                        isExpanded = true
                         loadSubfolders() // Trigger reload
                     }
                 }
@@ -111,18 +99,24 @@ struct FolderNodeView: View {
                 Text("Are you sure you want to delete '\(folder.name)'? This cannot be undone.")
             }
         }
-        .onChange(of: isExpanded.wrappedValue) { _, expanded in
-            if expanded && subfolders == nil {
-                loadSubfolders()
+        .onChange(of: isExpanded) { _, expanded in
+            if expanded {
+                viewModel.expandedFolders.insert(folder.url.path)
+                if subfolders == nil {
+                    loadSubfolders()
+                }
+            } else {
+                viewModel.expandedFolders.remove(folder.url.path)
             }
         }
         .onChange(of: viewModel.fileSystemRefreshID) { _, _ in
-            if isExpanded.wrappedValue {
+            if isExpanded {
                 loadSubfolders()
             }
         }
         .onAppear {
-            if isExpanded.wrappedValue && subfolders == nil {
+            isExpanded = viewModel.expandedFolders.contains(folder.url.path)
+            if isExpanded && subfolders == nil {
                 loadSubfolders()
             }
             checkExpansion()
@@ -133,7 +127,7 @@ struct FolderNodeView: View {
     }
     
     private func checkExpansion() {
-        guard !isExpanded.wrappedValue else { return }
+        guard !isExpanded else { return }
         guard let current = viewModel.currentFolder else { return }
         
         let folderPath = folder.url.standardizedFileURL.path
@@ -141,7 +135,7 @@ struct FolderNodeView: View {
         
         if currentPath.hasPrefix(folderPath) && currentPath != folderPath {
             if currentPath.hasPrefix(folderPath + "/") {
-                isExpanded.wrappedValue = true
+                isExpanded = true
             }
         }
     }

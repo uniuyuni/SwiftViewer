@@ -11,6 +11,7 @@ final class FlagFeatureTests: XCTestCase {
     var context: NSManagedObjectContext!
     
     override func setUpWithError() throws {
+        UserDefaults.standard.removeObject(forKey: "filterCriteria")
         persistenceController = PersistenceController(inMemory: true)
         context = persistenceController.container.viewContext
         viewModel = MainViewModel(persistenceController: persistenceController, inMemory: true)

@@ -9,10 +9,14 @@ struct SimpleFolderTreeView: View {
     var viewModel: AdvancedCopyViewModel? = nil
     
     var body: some View {
-        List {
-            ForEach(rootFolders) { folder in
-                SimpleFolderNodeView(folder: folder, selectedFolder: $selectedFolder, expandedFolders: $expandedFolders, virtualFolders: virtualFolders, isLoading: isLoading, viewModel: viewModel)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 2) {
+                ForEach(rootFolders) { folder in
+                    SimpleFolderNodeView(folder: folder, selectedFolder: $selectedFolder, expandedFolders: $expandedFolders, virtualFolders: virtualFolders, isLoading: isLoading, viewModel: viewModel)
+                }
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
         }
     }
 }
@@ -29,25 +33,11 @@ struct SimpleFolderNodeView: View {
     @State private var showNewFolderAlert = false
     @State private var newFolderName = ""
     
-    var isExpanded: Binding<Bool> {
-        Binding(
-            get: { expandedFolders.contains(folder.url) },
-            set: { isExpanded in
-                if isExpanded {
-                    expandedFolders.insert(folder.url)
-                    if subfolders == nil {
-                        loadSubfolders()
-                    }
-                } else {
-                    expandedFolders.remove(folder.url)
-                }
-            }
-        )
-    }
+    @State private var isExpanded: Bool = false
     
     var body: some View {
         if folder.isAvailable {
-            DisclosureGroup(isExpanded: isExpanded) {
+            DisclosureGroup(isExpanded: $isExpanded) {
                 if let subfolders = subfolders {
                     // Merge real subfolders with virtual ones that belong here
                     let combined = mergeSubfolders(real: subfolders, virtual: virtualFolders, parent: folder.url)
@@ -67,6 +57,19 @@ struct SimpleFolderNodeView: View {
                 }
             } label: {
                 folderContent
+            }
+            .onChange(of: isExpanded) { _, expanded in
+                if expanded {
+                    expandedFolders.insert(folder.url)
+                    if subfolders == nil {
+                        loadSubfolders()
+                    }
+                } else {
+                    expandedFolders.remove(folder.url)
+                }
+            }
+            .onAppear {
+                isExpanded = expandedFolders.contains(folder.url)
             }
         } else {
             // Virtual folder (not expandable)
@@ -103,7 +106,7 @@ struct SimpleFolderNodeView: View {
         }
         .buttonStyle(.plain)
         .onReceive(NotificationCenter.default.publisher(for: .refreshFileSystem)) { _ in
-            if isExpanded.wrappedValue {
+            if isExpanded {
                 loadSubfolders()
             }
         }
@@ -123,7 +126,7 @@ struct SimpleFolderNodeView: View {
                 if !newFolderName.isEmpty, let viewModel = viewModel {
                     viewModel.createFolder(at: folder.url, name: newFolderName)
                     // Expand to show new folder
-                    isExpanded.wrappedValue = true
+                    isExpanded = true
                     loadSubfolders()
                 }
             }

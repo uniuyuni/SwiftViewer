@@ -8,6 +8,7 @@ public final class RawMetadataTests: XCTestCase {
     
     @MainActor
     public override func setUpWithError() throws {
+        UserDefaults.standard.removeObject(forKey: "filterCriteria")
         try super.setUpWithError()
         
         // Create temp directory
@@ -31,8 +32,8 @@ public final class RawMetadataTests: XCTestCase {
         let rawURL = tempDir.appendingPathComponent("test.ARW")
         let jpgURL = tempDir.appendingPathComponent("test.jpg")
         
-        try "dummy raw content".write(to: rawURL, atomically: true, encoding: .utf8)
-        try "dummy jpg content".write(to: jpgURL, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: rawURL, options: .atomic)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: jpgURL, options: .atomic)
         
         let rawItem = FileItem(url: rawURL, isDirectory: false)
         let jpgItem = FileItem(url: jpgURL, isDirectory: false)

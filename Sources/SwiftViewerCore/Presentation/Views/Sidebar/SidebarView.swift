@@ -400,12 +400,7 @@ struct CatalogFolderNodeView: View {
     @Binding var showRenameAlert: Bool
     @State private var showRemoveConfirmation = false
 
-    var isExpanded: Binding<Bool> {
-        Binding(
-            get: { viewModel.expandedCatalogFolders.contains(node.url.path) },
-            set: { _ in viewModel.toggleCatalogExpansion(for: node.url) }
-        )
-    }
+    @State private var isExpanded: Bool = false
 
     var isSelected: Bool {
         viewModel.selectedCatalogFolder?.url == node.url && viewModel.currentCollection == nil
@@ -413,12 +408,22 @@ struct CatalogFolderNodeView: View {
 
     var body: some View {
         if let children = node.children, !children.isEmpty {
-            DisclosureGroup(isExpanded: isExpanded) {
+            DisclosureGroup(isExpanded: $isExpanded) {
                 CatalogFolderTreeView(
                     nodes: children, viewModel: viewModel, folderToRename: $folderToRename,
                     newFolderName: $newFolderName, showRenameAlert: $showRenameAlert)
             } label: {
                 folderContent
+            }
+            .onChange(of: isExpanded) { _, expanded in
+                if expanded {
+                    viewModel.expandedCatalogFolders.insert(node.url.path)
+                } else {
+                    viewModel.expandedCatalogFolders.remove(node.url.path)
+                }
+            }
+            .onAppear {
+                isExpanded = viewModel.expandedCatalogFolders.contains(node.url.path)
             }
         } else {
             folderContent
@@ -564,7 +569,6 @@ struct SidebarListView: View {
         }
         .listStyle(.sidebar)
         .frame(minWidth: 200)
-
         .navigationTitle(viewModel.headerTitle)
     }
 }

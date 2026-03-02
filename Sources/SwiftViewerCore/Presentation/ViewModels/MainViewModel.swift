@@ -1542,7 +1542,7 @@ public class MainViewModel: ObservableObject {
             }
 
             // Get metadata from cache (for Folders mode overlay support)
-            let cachedMeta = metadataCache[item.url]
+            let cachedMeta = metadataCache[item.url.standardizedFileURL]
 
             // Color Label Filter
             if let label = filterCriteria.colorLabel {
@@ -1581,7 +1581,7 @@ public class MainViewModel: ObservableObject {
             }
 
             // Metadata/Attribute filter using Cache
-            if let exif = metadataCache[item.url] {
+            if let exif = metadataCache[item.url.standardizedFileURL] {
                 // Attribute Filter
                 if filterCriteria.minRating > 0 {
                     if let rating = exif.rating, rating < filterCriteria.minRating { return false }
@@ -2131,10 +2131,12 @@ public class MainViewModel: ObservableObject {
         let objectIDs = items.map { $0.objectID }
 
         // Offload to background to avoid blocking Main Thread with Fault firing
-        Task.detached(priority: .userInitiated) {
+        let controller = self.persistenceController
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self = self else { return }
             var newCache: [URL: ExifMetadata] = [:]
 
-            let bgContext = PersistenceController.shared.newBackgroundContext()
+            let bgContext = controller.newBackgroundContext()
 
             await bgContext.perform {
                 for id in objectIDs {
@@ -2180,7 +2182,7 @@ public class MainViewModel: ObservableObject {
         }
     }
 
-    @Published var expandedFolders: Set<String> = [] {
+    var expandedFolders: Set<String> = [] {
         didSet {
             // Debounce save?
             // For now, just save on change
@@ -2203,7 +2205,7 @@ public class MainViewModel: ObservableObject {
     }
 
     // Catalog Expansion Persistence
-    @Published var expandedCatalogFolders: Set<String> = [] {
+    var expandedCatalogFolders: Set<String> = [] {
         didSet {
             UserDefaults.standard.set(
                 Array(expandedCatalogFolders), forKey: "expandedCatalogFolders")
@@ -2508,21 +2510,35 @@ public class MainViewModel: ObservableObject {
         }
 
         // Let's fetch everything into a struct map here.
-        var localMetadataMap: [URL: (rating: Int16, isFavorite: Bool, flagStatus: Int16)] = [:]
+        var localMetadataMap: [URL: (rating: Int16, isFavorite: Bool, flagStatus: Int16, colorLabel: String?, uuid: UUID?)] = [:]
 
         let context = persistenceController.newBackgroundContext()
         await context.perform {
             let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
-            let paths = itemsToLoad.map { $0.url.path }
+            let paths = itemsToLoad.flatMap { item -> [String] in
+                let p = item.url.path
+                var variants = [p]
+                if p.hasPrefix("/var/") { variants.append("/private" + p) }
+                if p.hasPrefix("/private/var/") { variants.append(String(p.dropFirst(8))) }
+                return variants
+            }
+            print("DEBUG VM: Fetching paths: \(paths)")
             request.predicate = NSPredicate(format: "originalPath IN %@", paths)
             if let items = try? context.fetch(request) {
+                print("DEBUG VM: Fetched \(items.count) MediaItems from CoreData")
                 for item in items {
                     if let path = item.originalPath {
-                        localMetadataMap[URL(fileURLWithPath: path)] = (
-                            item.rating, item.isFavorite, item.flagStatus
-                        )
+                        print("DEBUG VM: Mapping path: \(path) -> \(item.colorLabel ?? "nil")")
+                        if let matched = itemsToLoad.first(where: { $0.url.path == path || "/private" + $0.url.path == path || $0.url.path == "/private" + path }) {
+                            print("DEBUG VM: Matched item! \(matched.url.standardizedFileURL)")
+                            localMetadataMap[matched.url.standardizedFileURL] = (
+                                item.rating, item.isFavorite, item.flagStatus, item.colorLabel, item.id
+                            )
+                        }
                     }
                 }
+            } else {
+                print("DEBUG VM: Fetch failed entirely")
             }
         }
 
@@ -2558,16 +2574,19 @@ public class MainViewModel: ObservableObject {
                         // if [5, 6, 7, 8].contains(data.orientation ?? 1) { ... }
 
                         // Merge Rating and Flags
-                        if let local = localMetadataMap[item.url] {
+                        if let local = localMetadataMap[item.url.standardizedFileURL] {
                             data.rating = Int(local.rating)
                             data.isFavorite = local.isFavorite
                             data.flagStatus = Int(local.flagStatus)
-                        } else if let localRating = localRatingsMap[item.url] {
+                            data.colorLabel = local.colorLabel
+                        } else if let localRating = localRatingsMap[item.url.standardizedFileURL] {
                             // Fallback if map failed but rating map exists (unlikely)
                             data.rating = Int(localRating)
                         }
                         self.metadataCache[item.url.standardizedFileURL] = data
                     }
+                    
+                    self.syncFileItemsWithMetadataMap(localMetadataMap)
 
                     // Re-sort if needed (e.g. if sorting by Date which depends on Exif)
                     if self.sortOption == .date { self.applySort() }
@@ -2584,15 +2603,16 @@ public class MainViewModel: ObservableObject {
                 var exif = await ExifReader.shared.readExif(from: item.url) ?? ExifMetadata()
 
                 // Merge Rating and Flags
-                if let local = localMetadataMap[item.url] {
+                if let local = localMetadataMap[item.url.standardizedFileURL] {
                     exif.rating = Int(local.rating)
                     exif.isFavorite = local.isFavorite
                     exif.flagStatus = Int(local.flagStatus)
-                } else if let localRating = localRatingsMap[item.url] {
+                    exif.colorLabel = local.colorLabel
+                } else if let localRating = localRatingsMap[item.url.standardizedFileURL] {
                     exif.rating = Int(localRating)
                 }
 
-                batch[item.url] = exif
+                batch[item.url.standardizedFileURL] = exif
                 count += 1
 
                 // Batch update every 200 items to reduce UI flickering
@@ -2600,7 +2620,7 @@ public class MainViewModel: ObservableObject {
                     let currentBatch = batch
                     await MainActor.run {
                         for (url, data) in currentBatch {
-                            self.metadataCache[url] = data
+                            self.metadataCache[url.standardizedFileURL] = data
                         }
                         if self.sortOption == .date { self.applySort() }
                     }
@@ -2626,6 +2646,7 @@ public class MainViewModel: ObservableObject {
                     // Fix: Use standardized URL for cache key to match FileItem
                     self.metadataCache[url.standardizedFileURL] = data
                 }
+                self.syncFileItemsWithMetadataMap(localMetadataMap)
                 self.isLoadingMetadata = false
 
                 // Re-sort if needed (e.g. if sorting by Date which depends on Exif)
@@ -2636,14 +2657,43 @@ public class MainViewModel: ObservableObject {
         }
     }
 
+    private func syncFileItemsWithMetadataMap(_ map: [URL: (rating: Int16, isFavorite: Bool, flagStatus: Int16, colorLabel: String?, uuid: UUID?)]) {
+        if appMode != .folders { return }
+        var changed = false
+        for i in 0..<allFiles.count {
+            let url = allFiles[i].url.standardizedFileURL
+            if let local = map[url] {
+                if allFiles[i].rating != Int(local.rating) ||
+                   allFiles[i].isFavorite != local.isFavorite ||
+                   allFiles[i].flagStatus != local.flagStatus ||
+                   allFiles[i].colorLabel != local.colorLabel ||
+                   allFiles[i].uuid != local.uuid {
+                   
+                    allFiles[i].rating = Int(local.rating)
+                    allFiles[i].isFavorite = local.isFavorite
+                    allFiles[i].flagStatus = local.flagStatus
+                    allFiles[i].colorLabel = local.colorLabel
+                    if let uuid = local.uuid {
+                        allFiles[i].uuid = uuid
+                    }
+                    changed = true
+                }
+            }
+        }
+        if changed {
+            applyFilter()
+        }
+    }
+
     // MARK: - Thumbnail Resume
     func checkForMetadataMismatches() {
         guard let catalog = currentCatalog else { return }
         let catalogID = catalog.objectID
 
+        let controller = self.persistenceController
         Task.detached(priority: .utility) { [weak self] in
             guard let self = self else { return }
-            let context = PersistenceController.shared.newBackgroundContext()
+            let context = controller.newBackgroundContext()
 
             var missingIDs: [NSManagedObjectID] = []
 
@@ -2667,8 +2717,9 @@ public class MainViewModel: ObservableObject {
             }
 
             if !missingIDs.isEmpty {
+                let idsToQueue = missingIDs
                 await MainActor.run {
-                    ThumbnailGenerationService.shared.enqueue(items: missingIDs)
+                    ThumbnailGenerationService.shared.enqueue(items: idsToQueue)
                 }
             }
         }
@@ -3043,10 +3094,11 @@ public class MainViewModel: ObservableObject {
         let catalogID = catalog.objectID
         let folderPath = folderURL.path
 
+        let controller = self.persistenceController
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self = self else { return }
 
-            let context = self.persistenceController.newBackgroundContext()
+            let context = controller.newBackgroundContext()
 
             // 1. Perform DB operations (Synchronous block inside perform)
             await context.perform {
@@ -3061,7 +3113,9 @@ public class MainViewModel: ObservableObject {
 
                     // Cancel generation first
                     let objectIDs = items.map { $0.objectID }
-                    ThumbnailGenerationService.shared.cancelGeneration(for: objectIDs)
+                    Task { @MainActor in
+                        ThumbnailGenerationService.shared.cancelGeneration(for: objectIDs)
+                    }
 
                     for item in items {
                         // Remove thumbnail
@@ -3198,13 +3252,13 @@ public class MainViewModel: ObservableObject {
         }
 
         // Update Metadata Cache
-        if var meta = metadataCache[item.url] {
+        if var meta = metadataCache[item.url.standardizedFileURL] {
             meta.rating = rating
-            metadataCache[item.url] = meta
+            metadataCache[item.url.standardizedFileURL] = meta
         } else {
             var meta = ExifMetadata()
             meta.rating = rating
-            metadataCache[item.url] = meta
+            metadataCache[item.url.standardizedFileURL] = meta
         }
 
         // Update allFiles and fileItems
@@ -3283,13 +3337,13 @@ public class MainViewModel: ObservableObject {
                 continue
             }
 
-            if var meta = metadataCache[item.url] {
+            if var meta = metadataCache[item.url.standardizedFileURL] {
                 meta.rating = rating
-                metadataCache[item.url] = meta
+                metadataCache[item.url.standardizedFileURL] = meta
             } else {
                 var meta = ExifMetadata()
                 meta.rating = rating
-                metadataCache[item.url] = meta
+                metadataCache[item.url.standardizedFileURL] = meta
             }
         }
 
@@ -3345,13 +3399,13 @@ public class MainViewModel: ObservableObject {
                 continue
             }
 
-            if var meta = metadataCache[item.url] {
+            if var meta = metadataCache[item.url.standardizedFileURL] {
                 meta.colorLabel = label
-                metadataCache[item.url] = meta
+                metadataCache[item.url.standardizedFileURL] = meta
             } else {
                 var meta = ExifMetadata()
                 meta.colorLabel = label
-                metadataCache[item.url] = meta
+                metadataCache[item.url.standardizedFileURL] = meta
             }
         }
 
@@ -3406,13 +3460,13 @@ public class MainViewModel: ObservableObject {
             }
 
             // Update Metadata Cache
-            if var meta = metadataCache[item.url] {
+            if var meta = metadataCache[item.url.standardizedFileURL] {
                 meta.colorLabel = label
-                metadataCache[item.url] = meta
+                metadataCache[item.url.standardizedFileURL] = meta
             } else {
                 var meta = ExifMetadata()
                 meta.colorLabel = label
-                metadataCache[item.url] = meta
+                metadataCache[item.url.standardizedFileURL] = meta
             }
         }
 
@@ -3532,19 +3586,21 @@ public class MainViewModel: ObservableObject {
             }
 
             // Update Metadata Cache
-            if var meta = metadataCache[item.url] {
+            if var meta = metadataCache[item.url.standardizedFileURL] {
                 meta.isFavorite = newStatus
-                metadataCache[item.url] = meta
+                metadataCache[item.url.standardizedFileURL] = meta
             } else {
                 var meta = ExifMetadata()
                 meta.isFavorite = newStatus
-                metadataCache[item.url] = meta
+                metadataCache[item.url.standardizedFileURL] = meta
             }
         }
 
         // Update Core Data
-        Task.detached(priority: .userInitiated) {
-            let context = PersistenceController.shared.container.viewContext
+        let controller = self.persistenceController
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self = self else { return }
+            let context = controller.container.viewContext
             await context.perform {
                 let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
                 for item in items {
@@ -3642,19 +3698,21 @@ public class MainViewModel: ObservableObject {
             }
 
             // Update Metadata Cache
-            if var meta = metadataCache[item.url] {
+            if var meta = metadataCache[item.url.standardizedFileURL] {
                 meta.flagStatus = Int(status)
-                metadataCache[item.url] = meta
+                metadataCache[item.url.standardizedFileURL] = meta
             } else {
                 var meta = ExifMetadata()
                 meta.flagStatus = Int(status)
-                metadataCache[item.url] = meta
+                metadataCache[item.url.standardizedFileURL] = meta
             }
         }
 
         // Update Core Data
-        Task.detached(priority: .userInitiated) {
-            let context = PersistenceController.shared.container.viewContext
+        let controller = self.persistenceController
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self = self else { return }
+            let context = controller.container.viewContext
             await context.perform {
                 let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
                 for item in items {
@@ -4156,9 +4214,9 @@ public class MainViewModel: ObservableObject {
                 // Update MetadataCache for label (if we store it there)
                 for (uuid, update) in updates {
                     if let item = newItems.first(where: { $0.uuid == uuid }) {
-                        if var meta = self.metadataCache[item.url] {
+                        if var meta = self.metadataCache[item.url.standardizedFileURL] {
                             meta.colorLabel = update.0
-                            self.metadataCache[item.url] = meta
+                            self.metadataCache[item.url.standardizedFileURL] = meta
                         }
                     }
                 }
@@ -4306,8 +4364,10 @@ public class MainViewModel: ObservableObject {
         guard let catalog = currentCatalog else { return }
         let catalogID = catalog.objectID
 
-        Task.detached(priority: .utility) {
-            let context = PersistenceController.shared.newBackgroundContext()
+        let controller = self.persistenceController
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self = self else { return }
+            let context = controller.newBackgroundContext()
             await context.perform {
                 let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
                 request.predicate = NSPredicate(format: "catalog == %@", catalogID)
@@ -4418,7 +4478,7 @@ public class MainViewModel: ObservableObject {
                             item.exifData = exifData
 
                             // Update Cache
-                            self.metadataCache[url] = exif
+                            self.metadataCache[url.standardizedFileURL] = exif
                         }
                     }
                 }
@@ -4484,7 +4544,7 @@ public class MainViewModel: ObservableObject {
                                     item.exifData = exifData
 
                                     // Update Cache
-                                    self.metadataCache[url] = exif
+                                    self.metadataCache[url.standardizedFileURL] = exif
                                 }
                             }
                         }
@@ -4863,7 +4923,25 @@ public class MainViewModel: ObservableObject {
                 case "none", "": tags = []
                 default: tags = []
                 }
-
+                
+                let tagColors = ["Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Gray"]
+                for url in safeUrls {
+                    do {
+                        var mutableURL = url
+                        var values = try mutableURL.resourceValues(forKeys: [.tagNamesKey])
+                        var currentTags = values.tagNames ?? []
+                        // Remove existing color tags
+                        currentTags.removeAll { tagColors.contains($0) }
+                        // Add new
+                        if !tags.isEmpty {
+                            currentTags.append(contentsOf: tags)
+                        }
+                        
+                        try (mutableURL as NSURL).setResourceValue(currentTags.isEmpty ? nil : currentTags, forKey: .tagNamesKey)
+                    } catch {
+                        Logger.shared.log("Failed to sync Finder tags for \(url.path): \(error)")
+                    }
+                }
             }
 
             // Invalidate Cache for ALL safe files, not just if label changed
@@ -4985,7 +5063,8 @@ public class MainViewModel: ObservableObject {
 
     private func updateCatalogPaths(from srcURL: URL, to destURL: URL) async {
         let srcPath = srcURL.standardizedFileURL.path
-        let context = PersistenceController.shared.newBackgroundContext()
+        let controller = self.persistenceController
+        let context = controller.newBackgroundContext()
 
         await context.perform {
             let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()

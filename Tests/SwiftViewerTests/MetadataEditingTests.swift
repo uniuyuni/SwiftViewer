@@ -9,6 +9,7 @@ final class MetadataEditingTests: XCTestCase {
     var tempDir: URL!
     
     override func setUpWithError() throws {
+        UserDefaults.standard.removeObject(forKey: "filterCriteria")
         persistenceController = PersistenceController(inMemory: true)
         viewModel = MainViewModel(persistenceController: persistenceController, inMemory: true)
         
@@ -24,7 +25,7 @@ final class MetadataEditingTests: XCTestCase {
     func testLabelDeletionRGB() async throws {
         // 1. Create dummy JPG
         let jpgURL = tempDir.appendingPathComponent("test.jpg")
-        try "dummy".write(to: jpgURL, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: jpgURL, options: .atomic)
         
         // 2. Set Label to Red using batch (simulating selection)
         // We use batch because it was the one with the loop bug, and it's easier to test logic
@@ -72,7 +73,7 @@ final class MetadataEditingTests: XCTestCase {
     func testRAWProtection() async throws {
         // 1. Create dummy RAW
         let rawURL = tempDir.appendingPathComponent("test.ARW")
-        try "dummy".write(to: rawURL, atomically: true, encoding: .utf8)
+        try (Data(base64Encoded: "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=", options: .ignoreUnknownCharacters) ?? Data("dummy".utf8)).write(to: rawURL, options: .atomic)
         
         // 2. Try to set Label to Red
         await viewModel.writeMetadataBatch(to: [rawURL], rating: nil, label: "Red")

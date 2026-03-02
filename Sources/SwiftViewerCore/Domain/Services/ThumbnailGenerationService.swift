@@ -3,6 +3,7 @@ import Combine
 import CoreData
 import Foundation
 
+@MainActor
 public class ThumbnailGenerationService: ObservableObject {
     public static let shared = ThumbnailGenerationService()
 
@@ -30,20 +31,14 @@ public class ThumbnailGenerationService: ObservableObject {
         queue.append(contentsOf: items)
         remainingCount = queue.count
 
-        // Ensure UI updates immediately on MainActor
-        Task { @MainActor in
-            // Check if still valid (not cancelled)
-            guard self.remainingCount > 0 else { return }
-
-            if !self.isGenerating {
-                self.isGenerating = true
-                self.statusMessage = "Generating thumbnails..."
-            }
-            // Update progress immediately
-            if self.totalCount > 0 {
-                self.progress =
-                    Double(self.totalCount - self.remainingCount) / Double(self.totalCount)
-            }
+        // Ensure UI updates immediately
+        if !self.isGenerating {
+            self.isGenerating = true
+            self.statusMessage = "Generating thumbnails..."
+        }
+        // Update progress immediately
+        if self.totalCount > 0 {
+            self.progress = Double(self.totalCount - self.remainingCount) / Double(self.totalCount)
         }
 
         processQueue()
@@ -94,6 +89,39 @@ public class ThumbnailGenerationService: ObservableObject {
         isSuspended = false
         processQueue()
     }
+    
+    // Internal thread safe getters/setters for the detached task
+    private func getBatch(size: Int) -> [NSManagedObjectID] {
+        return Array(queue.prefix(size))
+    }
+    
+    private func isItemCancelled(_ id: NSManagedObjectID) -> Bool {
+        return cancelledItems.contains(id)
+    }
+    
+    private func cleanCancelledItems() {
+        if cancelledItems.count > 1000 {
+            cancelledItems.removeAll()
+        }
+    }
+    
+    private func finishBatch(count: Int) {
+        if queue.count >= count {
+            queue.removeFirst(count)
+        } else {
+            queue.removeAll()
+        }
+        remainingCount = queue.count
+
+        // Throttle UI updates
+        let now = Date()
+        if lastUpdateTime == nil || now.timeIntervalSince(lastUpdateTime!) > 0.5 || remainingCount == 0 {
+            if totalCount > 0 {
+                progress = Double(totalCount - remainingCount) / Double(totalCount)
+            }
+            lastUpdateTime = now
+        }
+    }
 
     private func processQueue() {
         guard !isProcessing, !queue.isEmpty else {
@@ -128,11 +156,11 @@ public class ThumbnailGenerationService: ObservableObject {
 
             let context = PersistenceController.shared.newBackgroundContext()
 
-            while !self.queue.isEmpty {
+            while await self.queue.count > 0 {
                 if Task.isCancelled { break }
 
                 // Check suspension
-                if self.isSuspended {
+                if await self.isSuspended {
                     await MainActor.run {
                         self.isProcessing = false
                     }
@@ -140,8 +168,8 @@ public class ThumbnailGenerationService: ObservableObject {
                 }
 
                 // Process in batches
-                let batchSize = 10  // Restore batch size to 10 for better throughput
-                let batch = Array(self.queue.prefix(batchSize))
+                let batchSize = 10
+                let batch = await self.getBatch(size: batchSize)
 
                 // 1. Fetch Data (Sync on Context)
                 struct ItemData {
@@ -154,9 +182,10 @@ public class ThumbnailGenerationService: ObservableObject {
                     var result: [ItemData] = []
                     for objectID in batch {
                         // Check if cancelled
-                        if self.cancelledItems.contains(objectID) {
-                            continue
+                        let isCancelled = DispatchQueue.main.sync {
+                            self.cancelledItems.contains(objectID)
                         }
+                        if isCancelled { continue }
                         
                         if let item = try? context.existingObject(with: objectID) as? MediaItem,
                            let path = item.originalPath {
@@ -168,19 +197,13 @@ public class ThumbnailGenerationService: ObservableObject {
                     return result
                 }
                 
-                // Clean up cancelled items set periodically
-                if self.cancelledItems.count > 1000 {
-                    await MainActor.run {
-                        self.cancelledItems.removeAll()
-                    }
-                }
+                await self.cleanCancelledItems()
 
                 // 2. Generate Thumbnails (Async, Concurrent, No Context Lock)
                 for itemData in itemsToProcess {
                     if Task.isCancelled { break }
                     
-                    // Check specific item cancellation
-                    if self.cancelledItems.contains(itemData.objectID) {
+                    if await self.isItemCancelled(itemData.objectID) {
                         continue
                     }
 
@@ -192,8 +215,7 @@ public class ThumbnailGenerationService: ObservableObject {
                     let (thumb, metadata) = await ThumbnailGenerator.shared
                         .generateThumbnailAndMetadataAsync(for: url, size: size)
 
-                    // Check cancellation AGAIN before saving
-                    if self.cancelledItems.contains(itemData.objectID) {
+                    if await self.isItemCancelled(itemData.objectID) {
                         continue
                     }
 
@@ -208,16 +230,14 @@ public class ThumbnailGenerationService: ObservableObject {
                     let targetSize = previewSizeSetting > 0 ? CGFloat(previewSizeSetting) : 1024.0
                     let previewSize = CGSize(width: targetSize, height: targetSize)
                     
-                    // Check cancellation before preview generation (optimization)
-                    if self.cancelledItems.contains(itemData.objectID) {
+                    if await self.isItemCancelled(itemData.objectID) {
                         continue
                     }
 
                     if let preview = await ThumbnailGenerator.shared.generateThumbnailAsync(
                         for: url, size: previewSize)
                     {
-                        // Check cancellation AGAIN before saving preview
-                        if self.cancelledItems.contains(itemData.objectID) {
+                        if await self.isItemCancelled(itemData.objectID) {
                             continue
                         }
                         
@@ -227,16 +247,15 @@ public class ThumbnailGenerationService: ObservableObject {
 
                     // 3. Save Metadata (Sync on Context)
                     if let meta = metadata {
-                        // Check cancellation before context perform
-                        if self.cancelledItems.contains(itemData.objectID) {
+                        if await self.isItemCancelled(itemData.objectID) {
                             continue
                         }
                         
                         await context.perform {
-                            // Final check inside context
-                            if self.cancelledItems.contains(itemData.objectID) {
-                                return
+                            let isCancelled = DispatchQueue.main.sync {
+                                self.cancelledItems.contains(itemData.objectID)
                             }
+                            if isCancelled { return }
                             
                             if let item = try? context.existingObject(with: itemData.objectID)
                                 as? MediaItem
@@ -273,24 +292,7 @@ public class ThumbnailGenerationService: ObservableObject {
                 // Yield to prevent blocking
                 await Task.yield()
 
-                await MainActor.run {
-                    self.queue.removeFirst(min(batch.count, self.queue.count))
-                    self.remainingCount = self.queue.count
-
-                    // Throttle UI updates (e.g., every 0.5 seconds)
-                    let now = Date()
-                    if self.lastUpdateTime == nil
-                        || now.timeIntervalSince(self.lastUpdateTime!) > 0.5
-                        || self.remainingCount == 0
-                    {
-                        if self.totalCount > 0 {
-                            self.progress =
-                                Double(self.totalCount - self.remainingCount)
-                                / Double(self.totalCount)
-                        }
-                        self.lastUpdateTime = now
-                    }
-                }
+                await self.finishBatch(count: batch.count)
             }
 
             await MainActor.run {

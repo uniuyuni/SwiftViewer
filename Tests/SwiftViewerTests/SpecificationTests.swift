@@ -8,6 +8,7 @@ final class SpecificationTests: XCTestCase {
     var context: NSManagedObjectContext!
     
     override func setUpWithError() throws {
+        UserDefaults.standard.removeObject(forKey: "filterCriteria")
         // Use in-memory Core Data for testing
         let persistenceController = PersistenceController(inMemory: true)
         context = persistenceController.container.viewContext

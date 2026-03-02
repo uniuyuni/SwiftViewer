@@ -13,6 +13,7 @@ final class CoreDataIntegrationTests: XCTestCase {
     var collectionRepository: CollectionRepository!
     
     override func setUpWithError() throws {
+        UserDefaults.standard.removeObject(forKey: "filterCriteria")
         persistenceController = PersistenceController(inMemory: true)
         context = persistenceController.container.viewContext
         repository = CatalogRepository(context: context)
