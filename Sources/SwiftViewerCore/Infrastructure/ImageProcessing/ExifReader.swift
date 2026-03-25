@@ -5,6 +5,7 @@ import CoreGraphics
 public struct ExifMetadata: @unchecked Sendable {
     public var cameraMake: String?
     public var cameraModel: String?
+    public var lensMake: String?
     public var lensModel: String?
     public var focalLength: Double?
     public var aperture: Double?
@@ -228,6 +229,9 @@ class ExifReader {
                 metadata.shutterSpeed = ExifReader.shared.formatShutterSpeed(shutter)
             }
             
+            if let lensMake = exif[kCGImagePropertyExifLensMake as String] as? String {
+                metadata.lensMake = lensMake
+            }
             if let lens = exif[kCGImagePropertyExifLensModel as String] as? String {
                 metadata.lensModel = lens
             }
@@ -266,7 +270,7 @@ class ExifReader {
     
     // Explicitly list tags to ensure consistent behavior (Numeric vs String)
     private let exifTags = [
-        "-Make", "-Model", "-LensModel", "-Software",
+        "-Make", "-Model", "-LensMake", "-LensModel", "-Software",
         "-FocalLength#", "-FNumber#", "-ExposureTime#", "-ISO#", // Numeric for calculations
         "-ShutterSpeed#", "-Aperture#", // Composite tags for robustness
         "-DateTimeOriginal",
@@ -487,6 +491,7 @@ class ExifReader {
         // Basic Fields
         meta.cameraMake = output["Make"] as? String
         meta.cameraModel = output["Model"] as? String
+        meta.lensMake = output["LensMake"] as? String
         meta.lensModel = output["LensModel"] as? String
         meta.software = output["Software"] as? String
         

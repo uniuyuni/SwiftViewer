@@ -66,6 +66,7 @@ public class MediaRepository: MediaRepositoryProtocol {
                     exif.id = UUID()
                     exif.cameraMake = metadata.cameraMake
                     exif.cameraModel = metadata.cameraModel
+                    exif.lensMake = metadata.lensMake
                     exif.lensModel = metadata.lensModel
                     exif.focalLength = metadata.focalLength ?? 0
                     exif.aperture = metadata.aperture ?? 0
@@ -207,6 +208,7 @@ public class MediaRepository: MediaRepositoryProtocol {
                         exif.id = UUID()
                         exif.cameraMake = metadata.cameraMake
                         exif.cameraModel = metadata.cameraModel
+                        exif.lensMake = metadata.lensMake
                         exif.lensModel = metadata.lensModel
                         exif.focalLength = metadata.focalLength ?? 0
                         exif.aperture = metadata.aperture ?? 0

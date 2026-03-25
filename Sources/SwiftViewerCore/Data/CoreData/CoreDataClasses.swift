@@ -42,6 +42,7 @@ public class ExifData: NSManagedObject, Identifiable {
     @NSManaged public var id: UUID?
     @NSManaged public var cameraMake: String?
     @NSManaged public var cameraModel: String?
+    @NSManaged public var lensMake: String?
     @NSManaged public var lensModel: String?
     @NSManaged public var focalLength: Double
     @NSManaged public var aperture: Double

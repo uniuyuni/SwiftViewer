@@ -277,6 +277,7 @@ public class ThumbnailGenerationService: ObservableObject {
                                     exif.dateTimeOriginal = meta.dateTimeOriginal
                                     exif.cameraMake = meta.cameraMake
                                     exif.cameraModel = meta.cameraModel
+                                    exif.lensMake = meta.lensMake
                                     exif.lensModel = meta.lensModel
                                     exif.focalLength = meta.focalLength ?? 0
                                     exif.aperture = meta.aperture ?? 0

@@ -30,6 +30,7 @@
         <attribute name="gpsLongitude" optional="YES" attributeType="Double" usesScalarValueType="YES"/>
         <attribute name="id" optional="NO" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="iso" optional="YES" attributeType="Integer 32" usesScalarValueType="YES"/>
+        <attribute name="lensMake" optional="YES" attributeType="String"/>
         <attribute name="lensModel" optional="YES" attributeType="String"/>
         <attribute name="rating" optional="YES" attributeType="Integer 16" usesScalarValueType="YES"/>
         <attribute name="rawProps" optional="YES" attributeType="Binary"/>

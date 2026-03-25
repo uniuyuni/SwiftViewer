@@ -308,6 +308,12 @@ public class PersistenceController {
         ed_model.isOptional = true
         exifData.properties.append(ed_model)
         
+        let ed_lensMake = NSAttributeDescription()
+        ed_lensMake.name = "lensMake"
+        ed_lensMake.attributeType = .stringAttributeType
+        ed_lensMake.isOptional = true
+        exifData.properties.append(ed_lensMake)
+
         let ed_lens = NSAttributeDescription()
         ed_lens.name = "lensModel"
         ed_lens.attributeType = .stringAttributeType

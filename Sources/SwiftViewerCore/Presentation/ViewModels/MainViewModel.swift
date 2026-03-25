@@ -2157,6 +2157,7 @@ public class MainViewModel: ObservableObject {
                     if let exif = item.exifData {
                         meta.cameraMake = exif.cameraMake
                         meta.cameraModel = exif.cameraModel
+                        meta.lensMake = exif.lensMake
                         meta.lensModel = exif.lensModel
                         meta.focalLength = exif.focalLength
                         meta.aperture = exif.aperture
@@ -3511,6 +3512,183 @@ public class MainViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Lens metadata (Exif LensMake / LensModel)
+
+    public enum LensMetadataField: Sendable {
+        case lensMake(String)
+        case lensModel(String)
+    }
+
+    /// Apply lens maker or lens name. Updates `metadataCache`, Core Data when a `MediaItem` exists, and embedded metadata on non-RAW files via ExifTool (same RAW/file split as rating).
+    public func applyLensMetadata(for items: [FileItem], field: LensMetadataField) {
+        let updateMake: Bool
+        let makeRaw: String?
+        let updateModel: Bool
+        let modelRaw: String?
+        switch field {
+        case .lensMake(let s):
+            updateMake = true
+            makeRaw = s
+            updateModel = false
+            modelRaw = nil
+        case .lensModel(let s):
+            updateMake = false
+            makeRaw = nil
+            updateModel = true
+            modelRaw = s
+        }
+
+        for item in items {
+            // Match rating batch: skip in-memory EXIF cache updates for RAW in folder mode
+            if appMode == .folders,
+                FileConstants.rawExtensions.contains(item.url.pathExtension.lowercased())
+            {
+                continue
+            }
+
+            let urlKey = item.url.standardizedFileURL
+            if var meta = metadataCache[urlKey] {
+                if updateMake, let s = makeRaw {
+                    let v = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                    meta.lensMake = v.isEmpty ? nil : v
+                }
+                if updateModel, let s = modelRaw {
+                    let v = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                    meta.lensModel = v.isEmpty ? nil : v
+                }
+                metadataCache[urlKey] = meta
+            } else {
+                var meta = ExifMetadata()
+                if updateMake, let s = makeRaw {
+                    let v = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                    meta.lensMake = v.isEmpty ? nil : v
+                }
+                if updateModel, let s = modelRaw {
+                    let v = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                    meta.lensModel = v.isEmpty ? nil : v
+                }
+                metadataCache[urlKey] = meta
+            }
+        }
+
+        Task {
+            let context = persistenceController.newBackgroundContext()
+            await context.perform {
+                for item in items {
+                    let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
+                    if let uuid = item.uuid {
+                        request.predicate = NSPredicate(format: "id == %@", uuid as CVarArg)
+                    } else {
+                        request.predicate = NSPredicate(format: "originalPath == %@", item.url.path)
+                    }
+                    guard let mediaItem = try? context.fetch(request).first else { continue }
+
+                    let exif = mediaItem.exifData ?? ExifData(context: context)
+                    if mediaItem.exifData == nil {
+                        exif.id = UUID()
+                        mediaItem.exifData = exif
+                    }
+                    if updateMake, let s = makeRaw {
+                        let v = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                        exif.lensMake = v.isEmpty ? nil : v
+                    }
+                    if updateModel, let s = modelRaw {
+                        let v = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                        exif.lensModel = v.isEmpty ? nil : v
+                    }
+                }
+                try? context.save()
+            }
+
+            let urlsForExif = items.compactMap { item -> URL? in
+                let ext = item.url.pathExtension.lowercased()
+                if FileConstants.rawExtensions.contains(ext) { return nil }
+                return item.url
+            }
+
+            if !urlsForExif.isEmpty {
+                await self.writeLensMetadataBatch(
+                    to: urlsForExif,
+                    updateLensMake: updateMake,
+                    lensMake: makeRaw,
+                    updateLensModel: updateModel,
+                    lensModel: modelRaw)
+            }
+
+            await MainActor.run {
+                self.applyFilter()
+            }
+        }
+    }
+
+    nonisolated private func writeLensMetadataBatch(
+        to urls: [URL],
+        updateLensMake: Bool,
+        lensMake: String?,
+        updateLensModel: Bool,
+        lensModel: String?
+    ) async {
+        guard !urls.isEmpty, updateLensMake || updateLensModel else { return }
+
+        await MainActor.run {
+            self.isUpdatingMetadata = true
+        }
+        FileSystemMonitor.shared.suspend()
+
+        defer {
+            Task {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                FileSystemMonitor.shared.resume()
+
+                await MainActor.run {
+                    self.isUpdatingMetadata = false
+                }
+            }
+        }
+
+        let paths = ["/usr/local/bin/exiftool", "/opt/homebrew/bin/exiftool", "/usr/bin/exiftool"]
+        var exifToolPath = "/usr/local/bin/exiftool"
+        for path in paths where FileManager.default.fileExists(atPath: path) {
+            exifToolPath = path
+            break
+        }
+        guard FileManager.default.fileExists(atPath: exifToolPath) else {
+            Logger.shared.log("ExifTool not found; skipping lens metadata file write.")
+            return
+        }
+
+        var args = ["-overwrite_original"]
+        if updateLensMake, let s = lensMake {
+            let v = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            args.append(v.isEmpty ? "-LensMake=" : "-LensMake=\(v)")
+        }
+        if updateLensModel, let s = lensModel {
+            let v = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            args.append(v.isEmpty ? "-LensModel=" : "-LensModel=\(v)")
+        }
+        args.append(contentsOf: urls.map { $0.path })
+
+        Logger.shared.log("ExifTool Lens metadata batch (\(urls.count) files): \(args)")
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: exifToolPath)
+        process.arguments = args
+        process.environment = ProcessInfo.processInfo.environment
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            for url in urls {
+                ExifReader.shared.invalidateCache(for: url)
+            }
+        } catch {
+            Logger.shared.log("ExifTool lens batch failed: \(error)")
+        }
+    }
+
     // MARK: - Favorite and Flag Status
 
     func toggleFavorite(for items: [FileItem]) {
@@ -4451,6 +4629,7 @@ public class MainViewModel: ObservableObject {
                             let exifData = ExifData(context: context)
                             exifData.cameraMake = exif.cameraMake
                             exifData.cameraModel = exif.cameraModel
+                            exifData.lensMake = exif.lensMake
                             exifData.lensModel = exif.lensModel
                             exifData.focalLength = exif.focalLength ?? 0
                             exifData.aperture = exif.aperture ?? 0
@@ -4517,6 +4696,7 @@ public class MainViewModel: ObservableObject {
                                     let exifData = item.exifData ?? ExifData(context: context)
                                     exifData.cameraMake = exif.cameraMake
                                     exifData.cameraModel = exif.cameraModel
+                                    exifData.lensMake = exif.lensMake
                                     exifData.lensModel = exif.lensModel
                                     exifData.focalLength = exif.focalLength ?? 0
                                     exifData.aperture = exif.aperture ?? 0

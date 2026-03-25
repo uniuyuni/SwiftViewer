@@ -1,8 +1,14 @@
 import CoreData
 import SwiftUI
 
+private struct PendingLensBatchApply {
+    let items: [FileItem]
+    let field: MainViewModel.LensMetadataField
+}
+
 struct InspectorView: View {
     @ObservedObject var viewModel: MainViewModel
+    @State private var pendingLensBatch: PendingLensBatchApply?
 
     init(viewModel: MainViewModel) {
         self.viewModel = viewModel
@@ -42,6 +48,28 @@ struct InspectorView: View {
                 .foregroundColor(Color(nsColor: .separatorColor)),
             alignment: .leading
         )
+        .confirmationDialog(
+            "レンズ情報の一括更新",
+            isPresented: Binding(
+                get: { pendingLensBatch != nil },
+                set: { if !$0 { pendingLensBatch = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingLensBatch
+        ) { pending in
+            Button("適用") {
+                viewModel.applyLensMetadata(for: pending.items, field: pending.field)
+                pendingLensBatch = nil
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("キャンセル", role: .cancel) {
+                pendingLensBatch = nil
+            }
+        } message: { pending in
+            Text(
+                "選択中の \(pending.items.count) 件にレンズ情報を反映します。RAW はファイルへ書き込みません（カタログに登録がある場合はカタログのみ更新）。JPEG 等は ExifTool で埋め込みます。"
+            )
+        }
     }
 
     private var editableSelection: [FileItem] {
@@ -191,6 +219,15 @@ struct InspectorView: View {
                 .disabled(!anyEditable)
             }
 
+            Divider()
+
+            MultiLensBatchSection(
+                selection: selection,
+                viewModel: viewModel,
+                isEditableItem: { isEditable($0) },
+                pendingLensBatch: $pendingLensBatch
+            )
+
             if !anyEditable {
                 Text("Editing disabled for RAW files.")
                     .font(.caption)
@@ -252,12 +289,13 @@ struct InspectorView: View {
                     Text(exif.cameraModel ?? "-")
                         .foregroundStyle(.secondary)
                 }
-                HStack {
-                    Text("Lens")
-                    Spacer()
-                    Text(exif.lensModel ?? "-")
-                        .foregroundStyle(.secondary)
-                }
+                SingleLensMetadataEditor(
+                    viewModel: viewModel,
+                    item: item,
+                    exif: exif,
+                    enabled: isEditable(item),
+                    isRAW: isRAW(item)
+                )
                 HStack {
                     Text("Software")
                     Spacer()
@@ -515,6 +553,188 @@ struct InspectorView: View {
         // Fallback to name if URL has no extension (e.g. Photos asset)
         let nameExt = (item.name as NSString).pathExtension.lowercased()
         return FileConstants.rawExtensions.contains(nameExt)
+    }
+}
+
+// MARK: - Lens metadata editing
+
+private struct SingleLensMetadataEditor: View {
+    @ObservedObject var viewModel: MainViewModel
+    let item: FileItem
+    let exif: ExifMetadata
+    let enabled: Bool
+    let isRAW: Bool
+    @State private var draftMake: String = ""
+    @State private var draftModel: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Lens make")
+                    .frame(minWidth: 76, alignment: .leading)
+                TextField("", text: $draftMake)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!enabled)
+                Button("適用") {
+                    viewModel.applyLensMetadata(for: [item], field: .lensMake(draftMake))
+                }
+                .disabled(!enabled)
+            }
+            HStack(alignment: .firstTextBaseline) {
+                Text("Lens name")
+                    .frame(minWidth: 76, alignment: .leading)
+                TextField("", text: $draftModel)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!enabled)
+                Button("適用") {
+                    viewModel.applyLensMetadata(for: [item], field: .lensModel(draftModel))
+                }
+                .disabled(!enabled)
+            }
+            if !viewModel.isExifToolAvailable, enabled, !isRAW {
+                Text("ExifTool が見つかりません。埋め込みへの書き込みはスキップされます。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .onAppear {
+            sync(from: exif)
+        }
+        .onChange(of: item.id) { _, _ in
+            sync(from: exif)
+        }
+    }
+
+    private func sync(from exif: ExifMetadata) {
+        draftMake = exif.lensMake ?? ""
+        draftModel = exif.lensModel ?? ""
+    }
+}
+
+private struct MultiLensBatchSection: View {
+    let selection: [FileItem]
+    @ObservedObject var viewModel: MainViewModel
+    let isEditableItem: (FileItem) -> Bool
+    @Binding var pendingLensBatch: PendingLensBatchApply?
+    @State private var draftMake: String = ""
+    @State private var draftModel: String = ""
+
+    private var anyLensEditable: Bool {
+        selection.contains(where: isEditableItem)
+    }
+
+    private var selectionSignature: String {
+        selection.map(\.id).sorted().joined(separator: ",")
+    }
+
+    /// Includes cached lens strings so drafts refresh after a batch apply.
+    private var lensSnapshot: String {
+        selection
+            .map { item in
+                let m = cached(item)
+                return "\(item.id)|\(m?.lensMake ?? "\u{FFFC}")|\(m?.lensModel ?? "\u{FFFC}")"
+            }
+            .joined(separator: ";")
+    }
+
+    private func cached(_ item: FileItem) -> ExifMetadata? {
+        viewModel.metadataCache[item.url.standardizedFileURL]
+    }
+
+    private var lensMakeIsUniform: Bool {
+        guard let first = selection.first else { return true }
+        let ref = cached(first)?.lensMake
+        return selection.allSatisfy { cached($0)?.lensMake == ref }
+    }
+
+    private var lensModelIsUniform: Bool {
+        guard let first = selection.first else { return true }
+        let ref = cached(first)?.lensModel
+        return selection.allSatisfy { cached($0)?.lensModel == ref }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Lens (batch)").font(.subheadline).bold()
+
+            HStack(alignment: .firstTextBaseline) {
+                Text("Lens make")
+                    .frame(minWidth: 76, alignment: .leading)
+                TextField("", text: $draftMake)
+                    .textFieldStyle(.roundedBorder)
+                Button("適用") {
+                    pendingLensBatch = PendingLensBatchApply(
+                        items: selection,
+                        field: .lensMake(draftMake)
+                    )
+                }
+                .disabled(!anyLensEditable)
+            }
+            if !lensMakeIsUniform {
+                Text("（値が複数あります）")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(alignment: .firstTextBaseline) {
+                Text("Lens name")
+                    .frame(minWidth: 76, alignment: .leading)
+                TextField("", text: $draftModel)
+                    .textFieldStyle(.roundedBorder)
+                Button("適用") {
+                    pendingLensBatch = PendingLensBatchApply(
+                        items: selection,
+                        field: .lensModel(draftModel)
+                    )
+                }
+                .disabled(!anyLensEditable)
+            }
+            if !lensModelIsUniform {
+                Text("（値が複数あります）")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !viewModel.isExifToolAvailable, anyLensEditable {
+                Text("ExifTool がない場合、JPEG 等への埋め込みは行われません。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !anyLensEditable {
+                Text("フォルダモードの RAW のみが選ばれているため、レンズ情報は更新できません。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .opacity(anyLensEditable ? 1.0 : 0.55)
+        .onAppear {
+            syncDrafts()
+        }
+        .onChange(of: selectionSignature) { _, _ in
+            syncDrafts()
+        }
+        .onChange(of: lensSnapshot) { _, _ in
+            syncDrafts()
+        }
+    }
+
+    private func syncDrafts() {
+        guard let first = selection.first else {
+            draftMake = ""
+            draftModel = ""
+            return
+        }
+        if lensMakeIsUniform {
+            draftMake = cached(first)?.lensMake ?? ""
+        } else {
+            draftMake = ""
+        }
+        if lensModelIsUniform {
+            draftModel = cached(first)?.lensModel ?? ""
+        } else {
+            draftModel = ""
+        }
     }
 }
 
