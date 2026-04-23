@@ -201,9 +201,11 @@ class ExifReader {
             metadata.software = tiff[kCGImagePropertyTIFFSoftware as String] as? String
         }
         
-        // IPTC (Rating, etc.)
+        // IPTC (Rating, etc.) — ImageIO can return Int, NSNumber, or String; XMP star rating is often not in IPTC
         if let iptc = props[kCGImagePropertyIPTCDictionary as String] as? [String: Any] {
-            metadata.rating = iptc[kCGImagePropertyIPTCStarRating as String] as? Int
+            if let raw = iptc[kCGImagePropertyIPTCStarRating as String] {
+                metadata.rating = ExifReader.intFromPropertyValue(raw)
+            }
             
             if let urgency = iptc[kCGImagePropertyIPTCUrgency as String] as? Int {
                 switch urgency {
@@ -287,7 +289,7 @@ class ExifReader {
         "-Caption", "-Description", "-XMP:Description", "-ImageDescription", "-Caption-Abstract", // Caption
         "-GPSLatitude#", "-GPSLongitude#", "-GPSAltitude#", "-GPSImgDirection#", // GPS
         "-Rating", "-Label", "-Urgency",
-        "-XMP:Rating", "-XMP:Label", // Explicitly check XMP
+        "-XMP:Rating", "-XMP-xmp:Rating", "-XMP:Label", // XMP (prefer explicit xmp:Rating; see parseExifToolOutput)
         "-Subject", "-Keywords", "-XMP:Subject" // Keywords for Favorite/Flag
     ]
     
@@ -553,8 +555,10 @@ class ExifReader {
         meta.altitude = getDouble("GPSAltitude")
         meta.imageDirection = getDouble("GPSImgDirection")
         
-        // Rating
-        meta.rating = getInt("Rating") ?? getInt("XMP:Rating")
+        // Rating: composite "Rating" is often 0 or stale while XMP has the real stars — prefer XMP (matches writeMetadata)
+        let ratingFromXMP = getInt("XMP:Rating") ?? getInt("XMP-xmp:Rating")
+        let ratingGeneric = getInt("Rating")
+        meta.rating = ratingFromXMP ?? ratingGeneric
         
         // Label
         if let label = output["Label"] as? String ?? output["XMP:Label"] as? String {
@@ -608,6 +612,15 @@ class ExifReader {
         return meta
     }
     
+    /// Coerce values from ImageIO/CFPropertyList (e.g. IPTC) to an integer star rating.
+    fileprivate static func intFromPropertyValue(_ value: Any) -> Int? {
+        if let i = value as? Int { return i }
+        if let d = value as? Double { return Int(d) }
+        if let n = value as? NSNumber { return n.intValue }
+        if let s = value as? String, let i = Int(s.trimmingCharacters(in: .whitespaces)) { return i }
+        return nil
+    }
+
     private func parseDate(_ dateString: String) -> Date? {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
