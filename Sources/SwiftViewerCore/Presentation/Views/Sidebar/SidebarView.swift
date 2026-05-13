@@ -310,6 +310,7 @@ struct PhotosLibraryNodeView: View {
                 }
             }
         )
+        .disclosureGroupStyle(CustomSidebarDisclosureStyle())
     }
 }
 
@@ -369,8 +370,8 @@ struct LocationsSection: View {
                 .help("Refresh Devices")
             }
         ) {
-            ForEach(viewModel.rootFolders) { folder in
-                FolderNodeView(folder: folder, viewModel: viewModel)
+            ForEach(viewModel.rootFolders, id: \.url.path) { folder in
+                FolderNodeView(folder: folder, viewModel: viewModel, nodePath: "root:\(folder.url.path)")
             }
         }
     }
@@ -415,6 +416,7 @@ struct CatalogFolderNodeView: View {
             } label: {
                 folderContent
             }
+            .disclosureGroupStyle(CustomSidebarDisclosureStyle())
             .onChange(of: isExpanded) { _, expanded in
                 if expanded {
                     viewModel.expandedCatalogFolders.insert(node.url.path)
@@ -570,5 +572,33 @@ struct SidebarListView: View {
         .listStyle(.sidebar)
         .frame(minWidth: 200)
         .navigationTitle(viewModel.headerTitle)
+    }
+}
+
+struct CustomSidebarDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 4) {
+                Button {
+                    withAnimation {
+                        configuration.isExpanded.toggle()
+                    }
+                } label: {
+                    Image(systemName: configuration.isExpanded ? "chevron.down" : "chevron.right.square")
+                        .foregroundColor(.secondary)
+                        .imageScale(.small)
+                        .frame(width: 16, height: 16)
+                }
+                .buttonStyle(.plain)
+                
+                configuration.label
+            }
+            .padding(.vertical, 2)
+            
+            if configuration.isExpanded {
+                configuration.content
+                    .padding(.leading, 12)
+            }
+        }
     }
 }

@@ -1,13 +1,19 @@
 import SwiftUI
 import AppKit
 
+struct UIFolderNode: Identifiable {
+    let id: String
+    let item: FileItem
+}
+
 struct FolderNodeView: View {
     let folder: FileItem
     @ObservedObject var viewModel: MainViewModel
+    let nodePath: String
     
     @State private var isExpanded: Bool = false
     
-    @State private var subfolders: [FileItem]? = nil
+    @State private var subNodes: [UIFolderNode]? = nil
     
     // Alert States
     @State private var showRenameAlert = false
@@ -20,9 +26,9 @@ struct FolderNodeView: View {
     
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
-            if let subfolders = subfolders {
-                ForEach(subfolders) { subfolder in
-                    FolderNodeView(folder: subfolder, viewModel: viewModel)
+            if let subNodes = subNodes {
+                ForEach(subNodes) { subNode in
+                    FolderNodeView(folder: subNode.item, viewModel: viewModel, nodePath: subNode.id)
                 }
             } else {
                 ProgressView()
@@ -99,10 +105,11 @@ struct FolderNodeView: View {
                 Text("Are you sure you want to delete '\(folder.name)'? This cannot be undone.")
             }
         }
+        .disclosureGroupStyle(CustomSidebarDisclosureStyle())
         .onChange(of: isExpanded) { _, expanded in
             if expanded {
                 viewModel.expandedFolders.insert(folder.url.path)
-                if subfolders == nil {
+                if subNodes == nil {
                     loadSubfolders()
                 }
             } else {
@@ -116,7 +123,7 @@ struct FolderNodeView: View {
         }
         .onAppear {
             isExpanded = viewModel.expandedFolders.contains(folder.url.path)
-            if isExpanded && subfolders == nil {
+            if isExpanded && subNodes == nil {
                 loadSubfolders()
             }
             checkExpansion()
@@ -142,12 +149,14 @@ struct FolderNodeView: View {
     
     private func loadSubfolders() {
         let url = folder.url
+        let currentPath = nodePath
         Task.detached(priority: .userInitiated) {
             let items = FileSystemService.shared.getContentsOfDirectory(at: url, calculateCounts: true)
             let folders = items.filter { $0.isDirectory }
+            let nodes = folders.map { UIFolderNode(id: "\(currentPath)/\($0.name)", item: $0) }
             
             await MainActor.run {
-                self.subfolders = folders
+                self.subNodes = nodes
             }
         }
     }

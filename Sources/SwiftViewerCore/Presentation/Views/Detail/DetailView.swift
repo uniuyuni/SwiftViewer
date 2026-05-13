@@ -33,7 +33,7 @@ struct DetailView: View {
                     if FileConstants.allowedVideoExtensions.contains(item.url.pathExtension.lowercased()) {
                         VideoPlayerView(url: item.url)
                     } else {
-                        ZoomableImageView(url: item.url, itemID: item.uuid)
+                        ZoomableImageView(url: item.url, itemID: item.uuid, viewModel: viewModel)
                     }
                 } else {
                     if #available(macOS 14.0, *) {
@@ -93,39 +93,56 @@ struct DetailView: View {
 struct ZoomableImageView: View {
     let url: URL
     let itemID: UUID? // Add ID for cache lookup
+    @ObservedObject var viewModel: MainViewModel
     
     @State private var image: NSImage?
-    @State private var isZoomed: Bool = false
+    @State private var currentScale: CGFloat? = nil
     @State private var offset: CGSize = .zero
     @State private var dragOffset: CGSize = .zero
     @State private var isOffline: Bool = false
+    
+    // Zoom/Scroll State
+    @State private var viewSize: CGSize = .zero
+    @State private var isHovering: Bool = false
+    @State private var hoverLocation: CGPoint = .zero
+    @State private var scrollMonitor: Any?
+    @State private var useNearestNeighbor: Bool = false
     
     var body: some View {
         GeometryReader { geometry in
             ZStack {
                 if let nsImage = image {
+                    let imageSize = nsImage.size
+                    let viewSize = geometry.size
+                    let widthRatio = viewSize.width / imageSize.width
+                    let heightRatio = viewSize.height / imageSize.height
+                    let fitScale = min(widthRatio, heightRatio)
+                    let actualScale = currentScale ?? fitScale
+
                     Image(nsImage: nsImage)
+                        .interpolation(useNearestNeighbor ? .none : .high)
                         .resizable()
-                        .aspectRatio(contentMode: isZoomed ? .fill : .fit)
+                        .aspectRatio(contentMode: .fit)
                         .frame(
-                            width: isZoomed ? nsImage.size.width : geometry.size.width,
-                            height: isZoomed ? nsImage.size.height : geometry.size.height
+                            width: imageSize.width * actualScale,
+                            height: imageSize.height * actualScale
                         )
                         .offset(x: offset.width + dragOffset.width, y: offset.height + dragOffset.height)
                         .gesture(
-                            isZoomed ?
+                            currentScale != nil ?
                             DragGesture()
                                 .onChanged { value in
                                     dragOffset = value.translation
                                 }
                                 .onEnded { value in
-                                    let maxOffsetX = max(0, (nsImage.size.width - geometry.size.width) / 2)
-                                    let maxOffsetY = max(0, (nsImage.size.height - geometry.size.height) / 2)
+                                    let displayWidth = imageSize.width * actualScale
+                                    let displayHeight = imageSize.height * actualScale
+                                    let maxOffsetX = max(0, (displayWidth - viewSize.width) / 2)
+                                    let maxOffsetY = max(0, (displayHeight - viewSize.height) / 2)
                                     
                                     var newX = offset.width + value.translation.width
                                     var newY = offset.height + value.translation.height
                                     
-                                    // Clamp
                                     if newX > maxOffsetX { newX = maxOffsetX }
                                     if newX < -maxOffsetX { newX = -maxOffsetX }
                                     if newY > maxOffsetY { newY = maxOffsetY }
@@ -137,82 +154,6 @@ struct ZoomableImageView: View {
                                     }
                                 }
                             : nil
-                        )
-                        .gesture(
-                            SpatialTapGesture()
-                                .onEnded { event in
-                                    let location = event.location
-                                    
-                                    withAnimation {
-                                        if isZoomed {
-                                            // Zoom out to fit
-                                            isZoomed = false
-                                            offset = .zero
-                                            dragOffset = .zero
-                                        } else {
-                                            // Zoom in to click point
-                                            isZoomed = true
-                                            
-                                            // Calculate offset to center the clicked point
-                                            // 1. Get relative position in the FIT view
-                                            // The image is aspect fit, so it might have letterboxing/pillarboxing.
-                                            // But for simplicity, let's assume the tap is within the image bounds (or close enough).
-                                            // Actually, if aspect ratio differs, we need to account for empty space.
-                                            
-                                            let viewSize = geometry.size
-                                            let imageSize = nsImage.size
-                                            
-                                            let widthRatio = viewSize.width / imageSize.width
-                                            let heightRatio = viewSize.height / imageSize.height
-                                            let scale = min(widthRatio, heightRatio)
-                                            
-                                            let displayWidth = imageSize.width * scale
-                                            let displayHeight = imageSize.height * scale
-                                            
-                                            let xPadding = (viewSize.width - displayWidth) / 2
-                                            let yPadding = (viewSize.height - displayHeight) / 2
-                                            
-                                            // Relative position within the image (0.0 to 1.0)
-                                            let relativeX = (location.x - xPadding) / displayWidth
-                                            let relativeY = (location.y - yPadding) / displayHeight
-                                            
-                                            // Target point in FULL size image
-                                            let targetX = relativeX * imageSize.width
-                                            let targetY = relativeY * imageSize.height
-                                            
-                                            // Calculate offset to bring targetX, targetY to center of view
-                                            // Center of view is viewSize / 2
-                                            // Image is positioned at offset.
-                                            // Point (targetX, targetY) in image coordinates should be at (viewWidth/2, viewHeight/2).
-                                            // Image TopLeft is at (offset.width - imageWidth/2 + viewWidth/2, ...) ???
-                                            // Wait, SwiftUI Image frame center is at view center by default.
-                                            // offset moves the center.
-                                            
-                                            // If offset is 0, center of image is at center of view.
-                                            // We want (targetX, targetY) to be at center of view.
-                                            // Current center is (imageWidth/2, imageHeight/2).
-                                            // We need to shift by (imageWidth/2 - targetX, imageHeight/2 - targetY).
-                                            
-                                            let shiftX = (imageSize.width / 2) - targetX
-                                            let shiftY = (imageSize.height / 2) - targetY
-                                            
-                                            // Clamp offset
-                                            let maxOffsetX = max(0, (imageSize.width - viewSize.width) / 2)
-                                            let maxOffsetY = max(0, (imageSize.height - viewSize.height) / 2)
-                                            
-                                            var newX = shiftX
-                                            var newY = shiftY
-                                            
-                                            if newX > maxOffsetX { newX = maxOffsetX }
-                                            if newX < -maxOffsetX { newX = -maxOffsetX }
-                                            if newY > maxOffsetY { newY = maxOffsetY }
-                                            if newY < -maxOffsetY { newY = -maxOffsetY }
-                                            
-                                            offset = CGSize(width: newX, height: newY)
-                                            dragOffset = .zero
-                                        }
-                                    }
-                                }
                         )
                         
                     if isOffline {
@@ -246,6 +187,80 @@ struct ZoomableImageView: View {
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
+            // Move SpatialTapGesture from Image to ZStack so `event.location` is perfectly relative to `viewSize`.
+            .contentShape(Rectangle())
+            .gesture(
+                SpatialTapGesture()
+                    .onEnded { event in
+                        guard let nsImage = self.image else { return }
+                        let location = event.location
+                        
+                        let widthRatio = geometry.size.width / nsImage.size.width
+                        let heightRatio = geometry.size.height / nsImage.size.height
+                        let fitScale = min(widthRatio, heightRatio)
+                        let actualScale = self.currentScale ?? fitScale
+                        
+                        let isFit = abs(actualScale - fitScale) < 0.01
+                        
+                        if isFit {
+                            // Zoom to 100%
+                            let newScale: CGFloat = 1.0
+                            let scaleVal = newScale / actualScale
+                            
+                            let viewCenter = CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                            let pointerOffsetFromCenter = CGSize(
+                                width: location.x - viewCenter.x,
+                                height: location.y - viewCenter.y
+                            )
+                            
+                            let distanceToImageCenter = CGSize(
+                                width: pointerOffsetFromCenter.width - self.offset.width,
+                                height: pointerOffsetFromCenter.height - self.offset.height
+                            )
+                            
+                            let newDistance = CGSize(
+                                width: distanceToImageCenter.width * scaleVal,
+                                height: distanceToImageCenter.height * scaleVal
+                            )
+                            
+                            var newOffsetX = -newDistance.width
+                            var newOffsetY = -newDistance.height
+                            
+                            let newDisplayWidth = nsImage.size.width * newScale
+                            let newDisplayHeight = nsImage.size.height * newScale
+                            let maxOffsetX = max(0, (newDisplayWidth - geometry.size.width) / 2)
+                            let maxOffsetY = max(0, (newDisplayHeight - geometry.size.height) / 2)
+                            
+                            if newOffsetX > maxOffsetX { newOffsetX = maxOffsetX }
+                            if newOffsetX < -maxOffsetX { newOffsetX = -maxOffsetX }
+                            if newOffsetY > maxOffsetY { newOffsetY = maxOffsetY }
+                            if newOffsetY < -maxOffsetY { newOffsetY = -maxOffsetY }
+                            
+                            withAnimation {
+                                self.currentScale = newScale
+                                self.offset = CGSize(width: newOffsetX, height: newOffsetY)
+                                self.dragOffset = .zero
+                            }
+                            
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                                if let cs = self.currentScale, cs > 1.0 {
+                                    self.useNearestNeighbor = true
+                                }
+                            }
+                        } else {
+                            // Zoom to Fit
+                            self.useNearestNeighbor = false
+                            
+                            DispatchQueue.main.async {
+                                withAnimation {
+                                    self.currentScale = nil
+                                    self.offset = .zero
+                                    self.dragOffset = .zero
+                                }
+                            }
+                        }
+                    }
+            )
             .clipped()
             .task(id: url) {
                 // 1. Check if RAW. If so, prioritize Embedded Preview for speed.
@@ -318,14 +333,99 @@ struct ZoomableImageView: View {
                 .keyboardShortcut(.space, modifiers: [])
                 .hidden()
             )
-            // Ensure Space key works even when focused on this view
-            .background(
-                Button("Quick Look") {
-                    QuickLookService.shared.toggleQuickLook(for: [url])
+            .onChange(of: url) { _, _ in
+                // Reset zoom on image change
+                currentScale = nil
+                offset = .zero
+                dragOffset = .zero
+            }
+            .onAppear { 
+                viewSize = geometry.size 
+                updateViewModelScale(newSize: geometry.size)
+            }
+            .onChange(of: geometry.size) { _, newSize in 
+                viewSize = newSize 
+                updateViewModelScale(newSize: newSize)
+            }
+            .onChange(of: image) { _, _ in
+                updateViewModelScale(newSize: viewSize)
+            }
+            .onChange(of: currentScale) { _, _ in
+                updateViewModelScale(newSize: viewSize)
+            }
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let location):
+                    self.hoverLocation = location
+                    self.isHovering = true
+                case .ended:
+                    self.isHovering = false
                 }
-                .keyboardShortcut(.space, modifiers: [])
-                .hidden()
-            )
+            }
+            .onAppear {
+                scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+                    guard self.isHovering else { return event }
+                    
+                    let deltaY = event.deltaY
+                    // Increase sensitivity by multiplying delta or using larger step
+                    let zoomStep = deltaY * 0.05
+                    let zoomMultiplier = exp(zoomStep)
+                    if abs(zoomStep) < 0.001 { return event }
+                    
+                    guard let nsImage = self.image else { return event }
+                    let imgSize = nsImage.size
+                    
+                    let widthRatio = viewSize.width / imgSize.width
+                    let heightRatio = viewSize.height / imgSize.height
+                    let fitScale = min(widthRatio, heightRatio)
+                    let actualScale = self.currentScale ?? fitScale
+                    
+                    var newScale = actualScale * zoomMultiplier
+                    newScale = max(0.01, min(newScale, 50.0)) // 1% to 5000%
+                    
+                    let scaleVal = newScale / actualScale
+                    let viewCenter = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
+                    let pointerOffsetFromCenter = CGSize(
+                        width: self.hoverLocation.x - viewCenter.x,
+                        height: self.hoverLocation.y - viewCenter.y
+                    )
+                    
+                    var newOffsetX = self.offset.width * scaleVal - pointerOffsetFromCenter.width * (scaleVal - 1)
+                    var newOffsetY = self.offset.height * scaleVal - pointerOffsetFromCenter.height * (scaleVal - 1)
+                    
+                    let displayWidth = imgSize.width * newScale
+                    let displayHeight = imgSize.height * newScale
+                    let maxOffsetX = max(0, (displayWidth - viewSize.width) / 2)
+                    let maxOffsetY = max(0, (displayHeight - viewSize.height) / 2)
+                    
+                    if newOffsetX > maxOffsetX { newOffsetX = maxOffsetX }
+                    if newOffsetX < -maxOffsetX { newOffsetX = -maxOffsetX }
+                    if newOffsetY > maxOffsetY { newOffsetY = maxOffsetY }
+                    if newOffsetY < -maxOffsetY { newOffsetY = -maxOffsetY }
+                    
+                    self.currentScale = newScale
+                    self.offset = CGSize(width: newOffsetX, height: newOffsetY)
+                    self.useNearestNeighbor = newScale > 1.0
+                    
+                    return nil // Consume event
+                }
+            }
+            .onDisappear {
+                if let monitor = scrollMonitor {
+                    NSEvent.removeMonitor(monitor)
+                }
+            }
+        }
+    }
+    
+    private func updateViewModelScale(newSize: CGSize) {
+        guard let nsImage = image else { return }
+        let widthRatio = newSize.width / nsImage.size.width
+        let heightRatio = newSize.height / nsImage.size.height
+        let fitScale = min(widthRatio, heightRatio)
+        let actual = currentScale ?? fitScale
+        DispatchQueue.main.async {
+            viewModel.imageZoomScale = actual
         }
     }
 }

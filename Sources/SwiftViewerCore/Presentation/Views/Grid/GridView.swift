@@ -39,7 +39,6 @@ struct GridView: View {
             .hidden()
         )
         .navigationTitle(title)
-        .searchable(text: $viewModel.filterCriteria.searchText, placement: .automatic, prompt: "Search")
         .toolbar {
             toolbarContent
         }
@@ -88,6 +87,15 @@ struct GridView: View {
                 }
             } label: {
                 Label("Sort", systemImage: "arrow.up.arrow.down")
+            }
+        }
+        
+        ToolbarItem(placement: .automatic) {
+            if let zoomOut = viewModel.imageZoomScale {
+                Text(String(format: "%.0f%%", zoomOut * 100))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
             }
         }
     }

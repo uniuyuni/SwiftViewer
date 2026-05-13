@@ -35,8 +35,30 @@ struct FilterBarView: View {
                 Group {
                     if viewModel.filterTabSelection == 0 {
                         TextFilterView(viewModel: viewModel)
+                            .disabled(viewModel.isLoadingMetadata)
+                            .overlay {
+                                if viewModel.isLoadingMetadata {
+                                    HStack(spacing: 4) {
+                                        ProgressView().scaleEffect(0.6)
+                                        Text("Loading metadata...")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
                     } else if viewModel.filterTabSelection == 1 {
                         AttributeFilterView(viewModel: viewModel)
+                            .disabled(viewModel.isLoadingMetadata)
+                            .overlay {
+                                if viewModel.isLoadingMetadata {
+                                    HStack(spacing: 4) {
+                                        ProgressView().scaleEffect(0.6)
+                                        Text("Loading metadata...")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
                     } else {
                         MetadataFilterView(viewModel: viewModel)
                     }

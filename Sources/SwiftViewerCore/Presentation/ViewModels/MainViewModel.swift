@@ -51,6 +51,10 @@ public class MainViewModel: ObservableObject {
 
     @Published var appMode: AppMode = .folders
     @Published var currentCatalog: Catalog?
+    
+    // Image Detail Zoom State
+    @Published var imageZoomScale: CGFloat? = nil
+    
     @Published var filterCriteria = FilterCriteria() {
         didSet {
             saveFilterCriteria()
@@ -1749,6 +1753,8 @@ public class MainViewModel: ObservableObject {
     }
 
     var headerTitle: String {
+        var baseTitle = "SwiftViewer"
+        
         if let groupID = selectedPhotosGroupID {
             // Format: "LibraryID/DateID"
             let components = groupID.components(separatedBy: "/")
@@ -1756,20 +1762,29 @@ public class MainViewModel: ObservableObject {
                 let dateID = components[1]
                 // Find library name
                 if let library = photosLibraries.first(where: { $0.id == libraryID }) {
-                    return "\(library.name) - \(dateID)"
+                    baseTitle = "\(library.name) - \(dateID)"
+                } else {
+                    baseTitle = "Photos Library"
                 }
+            } else {
+                baseTitle = "Photos Library"
             }
-            return "Photos Library"
         } else if let collection = currentCollection {
-            return collection.name ?? "Collection"
+            baseTitle = collection.name ?? "Collection"
         } else if let folder = selectedCatalogFolder {
-            return folder.url.lastPathComponent
+            baseTitle = folder.url.lastPathComponent
         } else if appMode == .catalog, let catalog = currentCatalog {
-            return catalog.name ?? "Catalog"
+            baseTitle = catalog.name ?? "Catalog"
         } else if let folder = currentFolder {
-            return folder.name
+            baseTitle = folder.name
         }
-        return "SwiftViewer"
+        
+        // Append file name if exactly one file is selected
+        if selectedFiles.count == 1, let file = selectedFiles.first {
+            return "\(baseTitle) / \(file.name)"
+        }
+        
+        return baseTitle
     }
 
     private let photosLibrariesKey = "SavedPhotosLibraries_v2"
@@ -2231,8 +2246,9 @@ public class MainViewModel: ObservableObject {
 
     // Internal for testing
     func loadFiles(in folder: FileItem) {
-        // Cancel previous task
+        // Cancel previous tasks
         loadingTask?.cancel()
+        metadataTask?.cancel()
 
         // Run in background to prevent UI blocking (spinner)
         // Run in background to prevent UI blocking (spinner)
@@ -2330,7 +2346,7 @@ public class MainViewModel: ObservableObject {
                 // Check again after sleep
                 if self.isUpdatingMetadata { return }
 
-                if let current = self.currentFolder, current.url == folder.url {
+                if let current = self.currentFolder, current.url.standardizedFileURL == folder.url.standardizedFileURL {
                     self.loadFiles(in: current)
                     // Also trigger global refresh for sidebar
                     self.fileSystemRefreshID = UUID()
@@ -2338,7 +2354,7 @@ public class MainViewModel: ObservableObject {
 
                 // Catalog Mode Sync
                 if self.appMode == .catalog, let catalogFolder = self.selectedCatalogFolder,
-                    catalogFolder.url == folder.url
+                    catalogFolder.url.standardizedFileURL == folder.url.standardizedFileURL
                 {
                     Logger.shared.log(
                         "MainViewModel: FileSystem change detected in Catalog Folder: \(folder.url.lastPathComponent)"
@@ -2473,6 +2489,25 @@ public class MainViewModel: ObservableObject {
             self.rootFolders = roots
             // Restore last used catalog
             self.loadCurrentCatalogID()
+            
+            // Restore last used folder if we are not in catalog mode by default
+            let defaultMode = UserDefaults.standard.string(forKey: "defaultAppMode")
+            if defaultMode != "catalogs" {
+                var folderToOpen: URL? = nil
+                
+                if let lastPath = UserDefaults.standard.string(forKey: "lastOpenedFolder"),
+                   FileManager.default.fileExists(atPath: lastPath) {
+                    folderToOpen = URL(fileURLWithPath: lastPath)
+                } else {
+                    // Fallback to default (Pictures)
+                    folderToOpen = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first
+                }
+                
+                if let targetURL = folderToOpen {
+                    // Temporarily set a default FileItem. openFolder will handle the rest.
+                    self.openFolder(FileItem(url: targetURL, isDirectory: true))
+                }
+            }
         }
     }
 
@@ -2480,7 +2515,9 @@ public class MainViewModel: ObservableObject {
         async
     {
         isLoadingMetadata = true
-        metadataCache.removeAll()
+        // NOTE: metadataCacheはここでクリアしない。
+        // クリアするとフォルダ切り替え直後の非同期ロード中にapplyFilterが走って
+        // 評価が0扱いになりフィルター誤動作が発生するため、個別上書きで対応する。
 
         let itemsToLoad: [FileItem]
         if let urls = items {
@@ -2654,6 +2691,11 @@ public class MainViewModel: ObservableObject {
                 if self.sortOption == .date {
                     self.applySort()
                 }
+
+                // メタデータロード完了後に必ずフィルターを再適用する。
+                // syncFileItemsWithMetadataMap は allFiles に変化がない場合 applyFilter を呼ばないため、
+                // メタデータロード前にフィルターを設定してもキャッシュが揃った時点で再反映が必要。
+                self.applyFilter()
             }
         }
     }
@@ -3262,12 +3304,13 @@ public class MainViewModel: ObservableObject {
             metadataCache[item.url.standardizedFileURL] = meta
         }
 
-        // Update allFiles and fileItems
-        // We need to update allFiles because applyFilter uses it.
-        // Note: FileItem does not currently store rating, so we don't need to update it here.
-        // If we add rating to FileItem in the future, we should update it here.
-        if allFiles.firstIndex(where: { $0.id == item.id }) != nil {
-            // Placeholder for future update
+        // Update allFiles and fileItems (optimistic in-place update)
+        // allFiles is the source for applyFilter in folder mode, so rating must be updated immediately.
+        if let idx = allFiles.firstIndex(where: { $0.id == item.id }) {
+            allFiles[idx].rating = rating
+        }
+        if let idx = fileItems.firstIndex(where: { $0.id == item.id }) {
+            fileItems[idx].rating = rating
         }
         // Wait, GridView uses FileItem. If FileItem doesn't have rating, how is it shown?
         // GridView uses AsyncThumbnailView. Does it show rating?
@@ -3329,7 +3372,7 @@ public class MainViewModel: ObservableObject {
     }
 
     func updateRating(for items: [FileItem], rating: Int) {
-        // 1. Update Metadata Cache (Optimistic) - Skip RAW in Folders mode
+        // 1. Update Metadata Cache + allFiles/fileItems (Optimistic) - Skip RAW in Folders mode
         for item in items {
             // In Folders mode, skip RAW files
             if appMode == .folders
@@ -3345,6 +3388,14 @@ public class MainViewModel: ObservableObject {
                 var meta = ExifMetadata()
                 meta.rating = rating
                 metadataCache[item.url.standardizedFileURL] = meta
+            }
+
+            // Also update allFiles and fileItems in-place so applyFilter reflects immediately
+            if let idx = allFiles.firstIndex(where: { $0.id == item.id }) {
+                allFiles[idx].rating = rating
+            }
+            if let idx = fileItems.firstIndex(where: { $0.id == item.id }) {
+                fileItems[idx].rating = rating
             }
         }
 
