@@ -233,7 +233,8 @@ struct GridItemWrapper: View {
         .contextMenu {
             let targetItems = viewModel.selectedFiles.contains(item) ? Array(viewModel.selectedFiles) : [item]
             
-            if viewModel.appMode == .catalog && !viewModel.collections.isEmpty {
+            // Photos Library のアイテムはカタログ未登録のためコレクション追加は不可
+            if viewModel.appMode == .catalog && !viewModel.isPhotosMode && !viewModel.collections.isEmpty {
                 Menu("Add to Collection") {
                     ForEach(viewModel.collections) { collection in
                         Button(collection.name ?? "Untitled") {

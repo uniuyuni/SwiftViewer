@@ -206,7 +206,6 @@ public struct MainWindow: View {
             }
         }
         .keyboardShortcut("r", modifiers: [.command, .shift])
-        .keyboardShortcut("r", modifiers: [.command, .shift])
         .hidden()
         
         Button("Refresh All") {
@@ -400,4 +399,3 @@ struct MainViewModifiers: ViewModifier {
             .onChange(of: viewModel.filterCriteria.colorLabel) { _, _ in viewModel.applyFilter() }
     }
 }
-

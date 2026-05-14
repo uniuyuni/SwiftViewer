@@ -54,4 +54,20 @@ public class CatalogService {
         
         print("Opened catalog at: \(url.path)")
     }
+    
+    /// カタログを安全に開く。DBが壊れている/互換性が無い等でCoreDataストアが読み込めない場合はthrowし、
+    /// currentPackage や lastOpenedCatalogKey などの状態を更新しない。
+    @MainActor
+    public func openCatalogSafely(at url: URL) async throws {
+        let package = CatalogPackage(url: url)
+        
+        // 先にストアが読めるかを確認（成功した場合のみ状態を更新）
+        try await PersistenceController.shared.switchToCatalogAsync(at: package.databaseURL)
+        
+        currentPackage = package
+        ThumbnailCacheService.shared.updateCacheDirectory(to: package.thumbnailsURL)
+        UserDefaults.standard.set(url.absoluteString, forKey: lastOpenedCatalogKey)
+        
+        print("Opened catalog at: \(url.path)")
+    }
 }

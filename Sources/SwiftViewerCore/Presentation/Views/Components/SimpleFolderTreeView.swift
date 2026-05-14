@@ -58,6 +58,8 @@ struct SimpleFolderNodeView: View {
             } label: {
                 folderContent
             }
+            // メイン画面のツリーと同じインデント/矢印表現に揃える
+            .disclosureGroupStyle(CustomSidebarDisclosureStyle())
             .onChange(of: isExpanded) { _, expanded in
                 if expanded {
                     expandedFolders.insert(folder.url)

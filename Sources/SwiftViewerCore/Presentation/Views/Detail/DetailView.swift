@@ -152,6 +152,8 @@ struct ZoomableImageView: View {
                                         offset = CGSize(width: newX, height: newY)
                                         dragOffset = .zero
                                     }
+                                    
+                                    persistZoomState(nsImage: nsImage, viewSize: viewSize)
                                 }
                             : nil
                         )
@@ -241,6 +243,7 @@ struct ZoomableImageView: View {
                                 self.offset = CGSize(width: newOffsetX, height: newOffsetY)
                                 self.dragOffset = .zero
                             }
+                            persistZoomState(nsImage: nsImage, viewSize: geometry.size)
                             
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                                 if let cs = self.currentScale, cs > 1.0 {
@@ -258,6 +261,7 @@ struct ZoomableImageView: View {
                                     self.dragOffset = .zero
                                 }
                             }
+                            persistZoomState(nsImage: nsImage, viewSize: geometry.size)
                         }
                     }
             )
@@ -334,23 +338,48 @@ struct ZoomableImageView: View {
                 .hidden()
             )
             .onChange(of: url) { _, _ in
-                // Reset zoom on image change
-                currentScale = nil
-                offset = .zero
+                // 画像読み込み完了後（onChange of image）に拡大状態を復元する。
+                // 切り替え直後にドラッグ中の差分だけ残るのは不自然なのでここでクリアする。
                 dragOffset = .zero
             }
             .onAppear { 
                 viewSize = geometry.size 
+                if let img = image {
+                    restoreZoomStateIfNeeded(nsImage: img, viewSize: geometry.size)
+                }
                 updateViewModelScale(newSize: geometry.size)
             }
             .onChange(of: geometry.size) { _, newSize in 
                 viewSize = newSize 
+                if let img = image {
+                    // ウィンドウサイズ変更時も、画像外を表示しないように位置をクランプ
+                    offset = clampOffset(
+                        offset,
+                        imageSize: img.size,
+                        viewSize: newSize,
+                        scale: (currentScale ?? min(newSize.width / img.size.width, newSize.height / img.size.height))
+                    )
+                    persistZoomState(nsImage: img, viewSize: newSize)
+                }
                 updateViewModelScale(newSize: newSize)
             }
             .onChange(of: image) { _, _ in
+                if let img = image {
+                    restoreZoomStateIfNeeded(nsImage: img, viewSize: viewSize)
+                }
                 updateViewModelScale(newSize: viewSize)
             }
             .onChange(of: currentScale) { _, _ in
+                if let img = image {
+                    // スケール変更時も画像外を表示しないようクランプ
+                    offset = clampOffset(
+                        offset,
+                        imageSize: img.size,
+                        viewSize: viewSize,
+                        scale: (currentScale ?? min(viewSize.width / img.size.width, viewSize.height / img.size.height))
+                    )
+                    persistZoomState(nsImage: img, viewSize: viewSize)
+                }
                 updateViewModelScale(newSize: viewSize)
             }
             .onContinuousHover { phase in
@@ -406,6 +435,9 @@ struct ZoomableImageView: View {
                     self.currentScale = newScale
                     self.offset = CGSize(width: newOffsetX, height: newOffsetY)
                     self.useNearestNeighbor = newScale > 1.0
+                    if let img = self.image {
+                        self.persistZoomState(nsImage: img, viewSize: self.viewSize)
+                    }
                     
                     return nil // Consume event
                 }
@@ -416,6 +448,80 @@ struct ZoomableImageView: View {
                 }
             }
         }
+    }
+    
+    private func clampOffset(_ proposed: CGSize, imageSize: CGSize, viewSize: CGSize, scale: CGFloat) -> CGSize {
+        let displayWidth = imageSize.width * scale
+        let displayHeight = imageSize.height * scale
+        let maxOffsetX = max(0, (displayWidth - viewSize.width) / 2)
+        let maxOffsetY = max(0, (displayHeight - viewSize.height) / 2)
+        
+        var x = proposed.width
+        var y = proposed.height
+        
+        if x > maxOffsetX { x = maxOffsetX }
+        if x < -maxOffsetX { x = -maxOffsetX }
+        if y > maxOffsetY { y = maxOffsetY }
+        if y < -maxOffsetY { y = -maxOffsetY }
+        
+        return CGSize(width: x, height: y)
+    }
+    
+    private func currentCenterNormalized(imageSize: CGSize, scale: CGFloat, offset: CGSize) -> CGPoint {
+        let imgCenter = CGPoint(x: imageSize.width / 2, y: imageSize.height / 2)
+        let center = CGPoint(
+            x: imgCenter.x - (offset.width / scale),
+            y: imgCenter.y - (offset.height / scale)
+        )
+        // Normalize to 0..1
+        let nx = imageSize.width > 0 ? center.x / imageSize.width : 0.5
+        let ny = imageSize.height > 0 ? center.y / imageSize.height : 0.5
+        return CGPoint(x: min(1.0, max(0.0, nx)), y: min(1.0, max(0.0, ny)))
+    }
+    
+    private func offsetForCenterNormalized(_ center: CGPoint, imageSize: CGSize, viewSize: CGSize, scale: CGFloat) -> CGSize {
+        let imgCenter = CGPoint(x: imageSize.width / 2, y: imageSize.height / 2)
+        let desiredPoint = CGPoint(x: center.x * imageSize.width, y: center.y * imageSize.height)
+        let rawOffset = CGSize(
+            width: (imgCenter.x - desiredPoint.x) * scale,
+            height: (imgCenter.y - desiredPoint.y) * scale
+        )
+        return clampOffset(rawOffset, imageSize: imageSize, viewSize: viewSize, scale: scale)
+    }
+    
+    private func restoreZoomStateIfNeeded(nsImage: NSImage, viewSize: CGSize) {
+        let imgSize = nsImage.size
+        guard imgSize.width > 0, imgSize.height > 0, viewSize.width > 0, viewSize.height > 0 else { return }
+        
+        // Fitの場合は状態を持たない（=常に中央/オフセット無し）
+        guard let persistedScale = viewModel.persistedZoomScale else {
+            currentScale = nil
+            offset = .zero
+            dragOffset = .zero
+            useNearestNeighbor = false
+            return
+        }
+        
+        let center = viewModel.persistedZoomCenterNormalized ?? CGPoint(x: 0.5, y: 0.5)
+        currentScale = persistedScale
+        offset = offsetForCenterNormalized(center, imageSize: imgSize, viewSize: viewSize, scale: persistedScale)
+        dragOffset = .zero
+        useNearestNeighbor = persistedScale > 1.0
+    }
+    
+    private func persistZoomState(nsImage: NSImage, viewSize: CGSize) {
+        let imgSize = nsImage.size
+        guard imgSize.width > 0, imgSize.height > 0, viewSize.width > 0, viewSize.height > 0 else { return }
+        
+        // Fit表示なら状態を破棄
+        guard let scale = currentScale else {
+            viewModel.persistedZoomScale = nil
+            viewModel.persistedZoomCenterNormalized = nil
+            return
+        }
+        
+        viewModel.persistedZoomScale = scale
+        viewModel.persistedZoomCenterNormalized = currentCenterNormalized(imageSize: imgSize, scale: scale, offset: offset)
     }
     
     private func updateViewModelScale(newSize: CGSize) {
@@ -430,5 +536,4 @@ struct ZoomableImageView: View {
     }
 }
     
-
 

@@ -1,4 +1,5 @@
 import Combine
+import AppKit
 @preconcurrency import CoreData
 import SwiftUI
 import UniformTypeIdentifiers
@@ -54,6 +55,12 @@ public class MainViewModel: ObservableObject {
     
     // Image Detail Zoom State
     @Published var imageZoomScale: CGFloat? = nil
+    
+    /// 画像切り替え時に維持するズーム状態（nil = Fit表示）
+    /// - persistedZoomScale: 画像の表示スケール（1.0=等倍、nil=fit）
+    /// - persistedZoomCenterNormalized: 表示中心（画像座標の正規化 0.0〜1.0）。nil の場合は中央(0.5,0.5)扱い。
+    @Published var persistedZoomScale: CGFloat? = nil
+    @Published var persistedZoomCenterNormalized: CGPoint? = nil
     
     @Published var filterCriteria = FilterCriteria() {
         didSet {
@@ -309,8 +316,11 @@ public class MainViewModel: ObservableObject {
         // Reset state
         self.currentCatalog = nil
         self.fileItems = []
-        self.fileItems = []
         self.catalogs = []
+        self.allMediaItems = []
+        self.collections = []
+        self.currentCollection = nil
+        self.selectedCatalogFolder = nil
 
         // Re-initialize repositories with new context
         let newContext = persistenceController.container.viewContext
@@ -318,11 +328,9 @@ public class MainViewModel: ObservableObject {
         self.collectionRepository = CollectionRepository(context: newContext)
 
         // Reload
-        // Load persistent state
-        // Load persistent state
-        // loadPanePosition() // Not implemented yet or missing
-        // loadPanePosition() // Not implemented yet or missing
+        loadCatalogs()
         loadSavedPhotosLibraries()
+        // Collectionsは catalog 選択後に loadCollections(for:) で読み込む
 
         // Initial refresh
         refreshFolders()
@@ -336,23 +344,45 @@ public class MainViewModel: ObservableObject {
     func createNewCatalog() {
         let panel = NSSavePanel()
         panel.title = "Create New Catalog"
-        panel.allowedContentTypes = [UTType(filenameExtension: "svdata")!]
+        if let type = UTType(filenameExtension: "svdata") {
+            panel.allowedContentTypes = [type]
+        }
         panel.nameFieldStringValue = "New Catalog"
 
         if panel.runModal() == .OK, let url = panel.url {
             CatalogService.shared.createCatalog(at: url)
+            NotificationCenter.default.post(name: .requestPresentCatalogManager, object: nil)
         }
     }
 
     func openCatalog() {
         let panel = NSOpenPanel()
         panel.title = "Open Catalog"
-        panel.allowedContentTypes = [UTType(filenameExtension: "svdata")!]
+        if let type = UTType(filenameExtension: "svdata") {
+            panel.allowedContentTypes = [type]
+        }
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
 
         if panel.runModal() == .OK, let url = panel.url {
-            CatalogService.shared.openCatalog(at: url)
+            Task { @MainActor in
+                do {
+                    try await CatalogService.shared.openCatalogSafely(at: url)
+                    NotificationCenter.default.post(
+                        name: .requestPresentCatalogManager,
+                        object: nil
+                    )
+                } catch {
+                    // Message must be English (User Request)
+                    let alert = NSAlert()
+                    alert.alertStyle = .critical
+                    alert.messageText = "Cannot Open Catalog"
+                    alert.informativeText =
+                        "This catalog package appears to be corrupted or incompatible and cannot be opened.\n\nPlease choose another catalog."
+                    alert.addButton(withTitle: "OK")
+                    alert.runModal()
+                }
+            }
         }
     }
 
@@ -741,6 +771,11 @@ public class MainViewModel: ObservableObject {
     }
 
     func presentImportDialog() {
+        guard currentCatalog != nil else {
+            Logger.shared.log("Import cancelled: No catalog is selected.")
+            return
+        }
+        
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
@@ -927,6 +962,10 @@ public class MainViewModel: ObservableObject {
     }
 
     func addToCollection(_ items: [FileItem], collection: Collection) {
+        // Photos Library のアイテムはカタログ未登録のため、コレクション追加は不可
+        if isPhotosMode {
+            return
+        }
         let paths = items.map { $0.url.path }
         let request: NSFetchRequest<MediaItem> = MediaItem.fetchRequest()
         request.predicate = NSPredicate(format: "originalPath IN %@", paths)
@@ -1059,6 +1098,10 @@ public class MainViewModel: ObservableObject {
             request.predicate = NSPredicate(format: "collections CONTAINS %@", collection)
 
             if let items = try? persistenceController.container.viewContext.fetch(request) {
+                // メタデータフィルタの候補一覧は「コレクション内の全アイテム」を基準に固定したい。
+                // ここで filtered を基準に cache を作ると、1つ選んだ瞬間に候補が消えて複数選択できなくなる。
+                populateMetadataCache(from: items)
+
                 let filtered = filterItems(items)
                 let mapped = filtered.compactMap { item -> FileItem? in
                     guard let path = item.originalPath else { return nil }
@@ -1073,8 +1116,6 @@ public class MainViewModel: ObservableObject {
                         orientation: Int(item.orientation))
                 }
                 fileItems = sortItems(mapped)
-                // Also populate metadata cache for these items
-                populateMetadataCache(from: filtered)
             }
         } else if selectedPhotosGroupID != nil {
             // Photos Mode: Filter from allFiles
@@ -1747,6 +1788,10 @@ public class MainViewModel: ObservableObject {
     @Published var photosLibraryGroups: [UUID: [PhotosDateGroup]] = [:]  // Library ID -> Groups
     @Published var expandedPhotosGroups: Set<String> = []  // "LibraryID/DateID"
     @Published var selectedPhotosGroupID: String?  // "LibraryID/DateID"
+    
+    /// Security-scoped resource の start/stop 回数を揃えるためのカウンタ
+    /// - NOTE: `loadSavedPhotosLibraries()` が複数回呼ばれても start が積み増しにならないようにする
+    private var photosLibraryAccessCounts: [UUID: Int] = [:]
 
     var isPhotosMode: Bool {
         return selectedPhotosGroupID != nil
@@ -1834,7 +1879,7 @@ public class MainViewModel: ObservableObject {
                 )
 
                 // Attempt to access
-                if url.startAccessingSecurityScopedResource() {
+                if startPhotosLibraryAccessIfNeeded(libraryID: updatedLibrary.id, url: url) {
                     print("Successfully started accessing \(library.name)")
                     validLibraries.append(updatedLibrary)
                     loadAssets(for: updatedLibrary)
@@ -1903,7 +1948,7 @@ public class MainViewModel: ObservableObject {
         // Let's re-resolve the bookmark immediately to get a persistent URL reference if possible,
         // or just start accessing the URL we have (assuming fileImporter gave us permission).
 
-        if url.startAccessingSecurityScopedResource() {
+        if startPhotosLibraryAccessIfNeeded(libraryID: library.id, url: url) {
             photosLibraries.append(library)
             savePhotosLibraries()  // Persist changes
             loadAssets(for: library)
@@ -1930,10 +1975,32 @@ public class MainViewModel: ObservableObject {
     }
 
     func removePhotosLibrary(_ library: PhotosLibrary) {
-        library.url.stopAccessingSecurityScopedResource()  // Stop accessing
+        stopPhotosLibraryAccessIfNeeded(libraryID: library.id, url: library.url)
         photosLibraries.removeAll { $0.id == library.id }
         photosLibraryGroups.removeValue(forKey: library.id)
         savePhotosLibraries()
+    }
+
+    private func startPhotosLibraryAccessIfNeeded(libraryID: UUID, url: URL) -> Bool {
+        let current = photosLibraryAccessCounts[libraryID, default: 0]
+        if current > 0 {
+            // すでにセッション中に access を保持している
+            return true
+        }
+        let ok = url.startAccessingSecurityScopedResource()
+        if ok {
+            photosLibraryAccessCounts[libraryID] = 1
+        }
+        return ok
+    }
+    
+    private func stopPhotosLibraryAccessIfNeeded(libraryID: UUID, url: URL) {
+        let count = photosLibraryAccessCounts[libraryID, default: 0]
+        guard count > 0 else { return }
+        for _ in 0..<count {
+            url.stopAccessingSecurityScopedResource()
+        }
+        photosLibraryAccessCounts[libraryID] = 0
     }
 
     func togglePhotosGroupExpansion(libraryID: UUID, groupID: String) {

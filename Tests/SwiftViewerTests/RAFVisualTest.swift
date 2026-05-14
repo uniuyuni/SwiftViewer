@@ -8,7 +8,11 @@ final class RAFVisualTest: XCTestCase {
         let fileManager = FileManager.default
         let currentDirectory = URL(fileURLWithPath: fileManager.currentDirectoryPath)
         let testfilesURL = currentDirectory.appendingPathComponent("Testfiles")
-        
+
+        guard fileManager.fileExists(atPath: testfilesURL.path) else {
+            throw XCTSkip("Testfiles directory not found at \(testfilesURL.path)")
+        }
+
         // Find a RAF file
         let rafFile = try fileManager.contentsOfDirectory(at: testfilesURL, includingPropertiesForKeys: nil)
             .first { $0.pathExtension.lowercased() == "raf" }

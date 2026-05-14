@@ -11,8 +11,7 @@ final class RAWVerificationTests: XCTestCase {
         print("Looking for Testfiles at: \(testfilesURL.path)")
         
         guard fileManager.fileExists(atPath: testfilesURL.path) else {
-            XCTFail("Testfiles directory not found at \(testfilesURL.path). Please ensure it exists.")
-            return
+            throw XCTSkip("Testfiles directory not found at \(testfilesURL.path)")
         }
         
         let files = try fileManager.contentsOfDirectory(at: testfilesURL, includingPropertiesForKeys: nil)

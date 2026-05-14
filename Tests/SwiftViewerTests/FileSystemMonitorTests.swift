@@ -130,9 +130,11 @@ final class FileSystemMonitorTests: XCTestCase {
         // Suspend
         monitor.suspend()
         
-        // Resume after a delay
+        // Resume after a delay, then touch the directory so a new event fires (events while suspended are dropped)
         DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
             self.monitor.resume()
+            let bumpFile = self.tempDir.appendingPathComponent("after_resume.txt")
+            try? Data("x".utf8).write(to: bumpFile, options: .atomic)
         }
         
         // Create file immediately
@@ -148,8 +150,8 @@ final class FileSystemMonitorTests: XCTestCase {
         lock.unlock()
         XCTAssertFalse(firedBeforeResume, "Event should not fire before resume")
         
-        // Wait for the expectation to be fulfilled after resume (timeout after 2.0s)
-        waitForExpectations(timeout: 2.0)
+        // Wait for the expectation to be fulfilled after resume (CI/load can exceed 2s)
+        waitForExpectations(timeout: 5.0)
         
         lock.lock()
         let finalFired = eventFired

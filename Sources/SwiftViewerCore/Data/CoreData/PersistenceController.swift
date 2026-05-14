@@ -67,12 +67,10 @@ public class PersistenceController {
                 print("DEBUG: Failed to load model from file. Creating programmatic model.")
                 model = PersistenceController.createProgrammaticModel()
             }
-            
-            guard let unwrappedModel = model else {
-                fatalError("Failed to create Core Data model")
-            }
-            
-            finalModel = unwrappedModel
+
+            // Crashさせずに継続する（起動不能を避ける）
+            // ここでnilになるケースは稀だが、万一に備えてプログラム生成モデルへフォールバックする。
+            finalModel = model ?? PersistenceController.createProgrammaticModel()
             Self._cachedModel = finalModel
         }
 
@@ -86,16 +84,54 @@ public class PersistenceController {
         description.url = URL(fileURLWithPath: "/dev/null")
         container.persistentStoreDescriptions = [description]
         
-        container.loadPersistentStores(completionHandler: { (storeDescription, error) in
+        container.loadPersistentStores { [weak self] (_, error) in
+            guard let self else { return }
             if let error = error as NSError? {
-                fatalError("Unresolved error \(error), \(error.userInfo)")
+                // ここでfatalErrorにするとアプリが起動不能になるため、ログを出して
+                // 可能な限り動作継続（後続でカタログを開ければ復旧可能）。
+                print("Failed to load initial in-memory store: \(error), \(error.userInfo)")
+                
+                // Fallback: 新しいin-memoryスタックを作り直す（これでもダメならCoreData依存機能は使えない）
+                let fallback = NSPersistentContainer(
+                    name: "SwiftViewer",
+                    managedObjectModel: self.container.managedObjectModel
+                )
+                let desc = NSPersistentStoreDescription()
+                desc.type = NSInMemoryStoreType
+                desc.url = URL(fileURLWithPath: "/dev/null")
+                fallback.persistentStoreDescriptions = [desc]
+                
+                fallback.loadPersistentStores { _, fallbackError in
+                    if let fallbackError {
+                        print("Failed to recover Core Data stack: \(fallbackError)")
+                        return
+                    }
+                    DispatchQueue.main.async {
+                        self.container = fallback
+                        self.container.viewContext.automaticallyMergesChangesFromParent = true
+                    }
+                }
             }
-        })
+        }
         
         container.viewContext.automaticallyMergesChangesFromParent = true
     }
     
     public func switchToCatalog(at url: URL) {
+        // 既存API互換のため同期シグネチャは残しつつ、実処理はasync版に集約する
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.switchToCatalogAsync(at: url)
+            } catch {
+                // 失敗時は現状維持（呼び出し元でのユーザー通知が望ましい）
+                print("Failed to switch catalog (async) at \(url): \(error)")
+            }
+        }
+    }
+    
+    /// カタログDBへ切り替え（失敗時はthrow。成功時のみ container を差し替え、通知を発火する）
+    public func switchToCatalogAsync(at url: URL) async throws {
         // Save current context if needed
         if container.viewContext.hasChanges {
             try? container.viewContext.save()
@@ -110,21 +146,25 @@ public class PersistenceController {
         description.shouldInferMappingModelAutomatically = true
         newContainer.persistentStoreDescriptions = [description]
         
-        newContainer.loadPersistentStores { (storeDescription, error) in
-            if let error = error as NSError? {
-                print("Failed to load store at \(url): \(error)")
-                // Fallback or error handling?
+        newContainer.viewContext.automaticallyMergesChangesFromParent = true
+
+        // 1) ストアを確実にロード（失敗時はthrow）
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            newContainer.loadPersistentStores { _, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                continuation.resume(returning: ())
             }
         }
         
-        newContainer.viewContext.automaticallyMergesChangesFromParent = true
-        
-        // Replace container
-        self.container = newContainer
-        self.currentStoreURL = url
-        
-        // Notify change
-        NotificationCenter.default.post(name: .coreDataStackChanged, object: nil)
+        // 2) 成功時のみ container を差し替え、通知を発火（UI更新はメインスレッド）
+        await MainActor.run {
+            self.container = newContainer
+            self.currentStoreURL = url
+            NotificationCenter.default.post(name: .coreDataStackChanged, object: nil)
+        }
     }
     
     public var currentContext: NSManagedObjectContext {
@@ -590,4 +630,5 @@ extension Notification.Name {
     static let coreDataStackChanged = Notification.Name("coreDataStackChanged")
     static let requestNewCatalog = Notification.Name("requestNewCatalog")
     static let requestOpenCatalog = Notification.Name("requestOpenCatalog")
+    static let requestPresentCatalogManager = Notification.Name("requestPresentCatalogManager")
 }

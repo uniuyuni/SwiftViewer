@@ -274,9 +274,17 @@ final class IntegrationTests: XCTestCase {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         
-        // Wait
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        let cacheA = viewModel.metadataCache[fileA.standardizedFileURL]
-        XCTAssertEqual(cacheA?.rating, 4, "FolderA rating should be preserved")
+        // Wait for folder A row to show preserved rating (cache may be rebuilt asynchronously)
+        guard viewModel.fileItems.first != nil else {
+            XCTFail("File A not loaded after return")
+            return
+        }
+        var rating: Int?
+        for _ in 0..<40 {
+            rating = viewModel.fileItems.first(where: { $0.url.lastPathComponent == "test.jpg" })?.rating
+            if rating == 4 { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertEqual(rating, 4, "FolderA rating should be preserved on FileItem")
     }
 }

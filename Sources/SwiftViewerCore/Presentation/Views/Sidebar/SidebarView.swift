@@ -39,7 +39,12 @@ struct SidebarView: View {
         }
         .sheet(isPresented: $showCatalogManager) {
             CatalogManagerView(
-                selectedCatalog: $viewModel.currentCatalog, isImporting: viewModel.isImporting)
+                selectedCatalog: $viewModel.currentCatalog, isImporting: viewModel.isImporting
+            )
+            .interactiveDismissDisabled(true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .requestPresentCatalogManager)) { _ in
+            showCatalogManager = true
         }
         .alert("Rename Folder", isPresented: $showRenameAlert) {
             TextField("New Name", text: $newFolderName)
@@ -234,6 +239,7 @@ struct CatalogSection: View {
                 Label("Import...", systemImage: "square.and.arrow.down")
             }
             .padding(.leading)
+            .disabled(viewModel.currentCatalog == nil || viewModel.isImporting)
         }
         .onDrop(of: [.folder], delegate: CatalogDropDelegate(viewModel: viewModel))
     }
@@ -512,6 +518,11 @@ struct CollectionsSectionView: View {
                         .cornerRadius(6)
                 }
                 .buttonStyle(.plain)
+                // グリッドからコレクションへドラッグ&ドロップで追加（Catalogモードのみ）
+                .onDrop(
+                    of: [.fileURL],
+                    delegate: CollectionDropDelegate(collection: collection, viewModel: viewModel)
+                )
                 .contextMenu {
                     Button("Rename") {
                         collectionToRename = collection
@@ -534,6 +545,66 @@ struct CollectionsSectionView: View {
     }
 }
 
+// MARK: - Collection Drop
+struct CollectionDropDelegate: DropDelegate {
+    let collection: Collection
+    let viewModel: MainViewModel
+    
+    func validateDrop(info: DropInfo) -> Bool {
+        // Collections は Catalog モード前提
+        // Photos Library モードでは追加不可（カタログ未登録のため）
+        guard !viewModel.isPhotosMode else { return false }
+        guard viewModel.appMode == .catalog, viewModel.currentCatalog != nil else { return false }
+        return info.hasItemsConforming(to: [.fileURL])
+    }
+    
+    func performDrop(info: DropInfo) -> Bool {
+        guard !viewModel.isPhotosMode else { return false }
+        guard viewModel.appMode == .catalog, viewModel.currentCatalog != nil else { return false }
+        
+        // 1) 内部ドラッグ（グリッド等）: DragState のURLを起点に、複数選択ならまとめて追加
+        if DragState.shared.isValid, let draggedURL = DragState.shared.currentDragSource {
+            let isDraggedIncludedInSelection = viewModel.selectedFiles.contains(where: { $0.url == draggedURL })
+            let itemsToAdd: [FileItem]
+            
+            if isDraggedIncludedInSelection, !viewModel.selectedFiles.isEmpty {
+                itemsToAdd = Array(viewModel.selectedFiles)
+            } else if let single = viewModel.fileItems.first(where: { $0.url == draggedURL }) {
+                itemsToAdd = [single]
+            } else {
+                itemsToAdd = [FileItem(url: draggedURL, isDirectory: false)]
+            }
+            
+            viewModel.addToCollection(itemsToAdd, collection: collection)
+            DragState.shared.clear()
+            return true
+        }
+        
+        // 2) 外部ドラッグ（Finder等）: fileURLを取り出して追加を試みる（Catalog未登録のファイルは結果的に無視される）
+        let providers = info.itemProviders(for: [.fileURL])
+        guard !providers.isEmpty else { return false }
+        
+        for provider in providers {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                var url: URL?
+                if let u = item as? URL {
+                    url = u
+                } else if let data = item as? Data {
+                    url = URL(dataRepresentation: data, relativeTo: nil)
+                }
+                
+                guard let fileURL = url else { return }
+                
+                Task { @MainActor in
+                    self.viewModel.addToCollection([FileItem(url: fileURL, isDirectory: false)], collection: self.collection)
+                }
+            }
+        }
+        
+        return true
+    }
+}
+
 struct SidebarListView: View {
     @ObservedObject var viewModel: MainViewModel
     @Binding var selection: FileItem?
@@ -551,7 +622,8 @@ struct SidebarListView: View {
 
     var body: some View {
         List(selection: $selection) {
-            if viewModel.appMode == .catalog {
+            // Photos Library モードでは、カタログ未登録アイテムが混ざるため Collections を表示しない
+            if viewModel.appMode == .catalog && !viewModel.isPhotosMode {
                 CollectionsSectionView(
                     viewModel: viewModel, showCollectionRenameAlert: $showCollectionRenameAlert,
                     collectionToRename: $collectionToRename, newCollectionName: $newCollectionName)

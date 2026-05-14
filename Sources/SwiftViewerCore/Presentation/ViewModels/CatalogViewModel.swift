@@ -6,10 +6,16 @@ class CatalogViewModel: ObservableObject {
     @Published var catalogs: [Catalog] = []
     @Published var currentCatalog: Catalog?
     
-    private let repository: CatalogRepositoryProtocol
-    
-    init(repository: CatalogRepositoryProtocol = CatalogRepository()) {
-        self.repository = repository
+    private var repository: CatalogRepositoryProtocol
+
+    init(repository: CatalogRepositoryProtocol? = nil) {
+        self.repository = repository ?? CatalogRepository()
+        loadCatalogs()
+    }
+
+    /// Rebind to the current Core Data stack (e.g. after opening another catalog package).
+    func reloadFromCurrentStore() {
+        repository = CatalogRepository(context: PersistenceController.shared.container.viewContext)
         loadCatalogs()
     }
     
@@ -21,13 +27,16 @@ class CatalogViewModel: ObservableObject {
         }
     }
     
-    func createCatalog(name: String) {
+    @discardableResult
+    func createCatalog(name: String) -> Catalog? {
         do {
             let newCatalog = try repository.createCatalog(name: name)
             catalogs.append(newCatalog)
             currentCatalog = newCatalog
+            return newCatalog
         } catch {
             print("Failed to create catalog: \(error)")
+            return nil
         }
     }
     
