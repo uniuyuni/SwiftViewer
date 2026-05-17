@@ -1,5 +1,14 @@
 import Foundation
 
+public struct PixelRGB: Equatable, Sendable {
+    public let r: UInt8
+    public let g: UInt8
+    public let b: UInt8
+    public init(r: UInt8, g: UInt8, b: UInt8) {
+        self.r = r; self.g = g; self.b = b
+    }
+}
+
 public struct FileItem: Identifiable, Hashable, Sendable {
     public var id: String {
         if let uuid = uuid {

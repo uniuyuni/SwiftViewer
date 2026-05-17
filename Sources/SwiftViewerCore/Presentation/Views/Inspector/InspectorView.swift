@@ -57,7 +57,7 @@ struct InspectorView: View {
             titleVisibility: .visible,
             presenting: pendingLensBatch
         ) { pending in
-            Button("適用") {
+            Button("Fix") {
                 viewModel.applyLensMetadata(for: pending.items, field: pending.field)
                 pendingLensBatch = nil
             }
@@ -537,6 +537,16 @@ struct InspectorView: View {
                     )
                     Text("Disabled: \(isRAW(item) && viewModel.appMode != .catalog ? "Yes" : "No")")
                     Text("ExifTool: \(viewModel.isExifToolAvailable ? "Available" : "Not Found")")
+                    if let p = viewModel.cursorImagePoint {
+                        Text("Cursor: (\(Int(p.x)), \(Int(p.y)))")
+                    } else {
+                        Text("Cursor: -")
+                    }
+                    if let c = viewModel.cursorRGB {
+                        Text("RGB: (\(c.r), \(c.g), \(c.b))")
+                    } else {
+                        Text("RGB: -")
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -575,7 +585,7 @@ private struct SingleLensMetadataEditor: View {
                 TextField("", text: $draftMake)
                     .textFieldStyle(.roundedBorder)
                     .disabled(!enabled)
-                Button("適用") {
+                Button("Fix") {
                     viewModel.applyLensMetadata(for: [item], field: .lensMake(draftMake))
                 }
                 .disabled(!enabled)
@@ -586,7 +596,7 @@ private struct SingleLensMetadataEditor: View {
                 TextField("", text: $draftModel)
                     .textFieldStyle(.roundedBorder)
                     .disabled(!enabled)
-                Button("適用") {
+                Button("Fix") {
                     viewModel.applyLensMetadata(for: [item], field: .lensModel(draftModel))
                 }
                 .disabled(!enabled)
@@ -662,7 +672,7 @@ private struct MultiLensBatchSection: View {
                     .frame(minWidth: 76, alignment: .leading)
                 TextField("", text: $draftMake)
                     .textFieldStyle(.roundedBorder)
-                Button("適用") {
+                Button("Fix") {
                     pendingLensBatch = PendingLensBatchApply(
                         items: selection,
                         field: .lensMake(draftMake)
@@ -681,7 +691,7 @@ private struct MultiLensBatchSection: View {
                     .frame(minWidth: 76, alignment: .leading)
                 TextField("", text: $draftModel)
                     .textFieldStyle(.roundedBorder)
-                Button("適用") {
+                Button("Fix") {
                     pendingLensBatch = PendingLensBatchApply(
                         items: selection,
                         field: .lensModel(draftModel)

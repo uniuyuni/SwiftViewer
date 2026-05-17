@@ -55,6 +55,10 @@ public class MainViewModel: ObservableObject {
     
     // Image Detail Zoom State
     @Published var imageZoomScale: CGFloat? = nil
+
+    // Cursor info for Inspector Debug Info (nil when cursor is off-image)
+    @Published var cursorImagePoint: CGPoint? = nil
+    @Published var cursorRGB: PixelRGB? = nil
     
     /// 画像切り替え時に維持するズーム状態（nil = Fit表示）
     /// - persistedZoomScale: 画像の表示スケール（1.0=等倍、nil=fit）
@@ -468,24 +472,15 @@ public class MainViewModel: ObservableObject {
     }
 
     private func handleAppDidBecomeActive() {
-        Logger.shared.log("App became active. Refreshing content based on mode: \(appMode)")
-
-        switch appMode {
-        case .folders:
-            refreshFolders()
-        case .catalog:
-            if selectedPhotosGroupID != nil {
-                // Photos Mode active
-                // Just refresh metadata, don't reload catalog items which would overwrite the view
-                Task { await loadMetadataForCurrentFolder() }
-
-                if fileItems.isEmpty {
-                    Logger.shared.log("Photos mode active but fileItems empty. Attempting reload.")
-                }
-            } else if let catalog = currentCatalog {
-                // Reload catalog items to reflect any external changes
-                loadMediaItems(from: catalog)
-            }
+        Logger.shared.log("App became active.")
+        // Do not rebuild fileItems / allMediaItems here: doing so destroys the
+        // user's grid selection (selectedFiles holds FileItem values that no
+        // longer equal the freshly-rebuilt ones) and visually resets the filter
+        // bar (populateMetadataCache rebuilds the available-options sets).
+        // External file system changes are observed by FileSystemMonitor, so a
+        // window-activation refresh is not required.
+        Task { @MainActor in
+            await loadMetadataForCurrentFolder()
         }
     }
 
@@ -4577,42 +4572,27 @@ public class MainViewModel: ObservableObject {
     @Published var showError = false
     @Published var errorMessage = ""
 
-    func deleteFolder(_ url: URL) {
-        isBlockingOperation = true
-        blockingOperationMessage = "Deleting \(url.lastPathComponent)..."
-        blockingOperationProgress = -1  // Indeterminate
-
-        Task {
-            do {
-                // Run in background
-                try await Task.detached(priority: .userInitiated) {
-                    try FileManager.default.removeItem(at: url)
-                }.value
-
-                Logger.shared.log("MainViewModel: Deleted folder \(url.path)")
-
-                await MainActor.run {
-                    // If current folder was deleted or is a subfolder, clear it
-                    if let current = self.currentFolder {
-                        let currentPath = current.url.path
-                        let deletedPath = url.path
-                        if currentPath == deletedPath || currentPath.hasPrefix(deletedPath + "/") {
-                            self.currentFolder = nil
-                        }
-                    }
-
-                    self.isBlockingOperation = false
-                    self.fileSystemRefreshID = UUID()
-                }
-            } catch {
-                await MainActor.run {
-                    self.isBlockingOperation = false
-                    Logger.shared.log(
-                        "MainViewModel: Failed to delete folder: \(error.localizedDescription)")
-                    self.errorMessage = "Failed to delete folder: \(error.localizedDescription)"
-                    self.showError = true
+    func moveFolderToTrash(_ url: URL) {
+        print("DEBUG moveFolderToTrash called: \(url.path)")
+        do {
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+            Logger.shared.log("MainViewModel: Moved folder to trash \(url.path)")
+            if let current = currentFolder {
+                let deletedPath = url.standardizedFileURL.path
+                let currentPath = current.url.standardizedFileURL.path
+                if currentPath == deletedPath || currentPath.hasPrefix(deletedPath + "/") {
+                    currentFolder = nil
                 }
             }
+            fileSystemRefreshID = UUID()
+        } catch {
+            print("DEBUG moveFolderToTrash error: \(error)")
+            Logger.shared.log("MainViewModel: Failed to move folder to trash: \(error.localizedDescription)")
+            let alert = NSAlert()
+            alert.messageText = "Failed to Move to Trash"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.runModal()
         }
     }
 

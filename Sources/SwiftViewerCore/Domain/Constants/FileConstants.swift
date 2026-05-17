@@ -5,7 +5,7 @@ public struct FileConstants {
         "jpg", "jpeg", "png", "heic", "tiff", "gif", "webp", "bmp", "heif", "tif",
         "arw", "cr2", "cr3", "nef", "dng", "orf", "raf", "rw2", "pef", "srw",
         "3fr", "fff", "mos", "x3f", "gpr", "iiq", "nrw", "sr2", "srf", "erf",
-        "kdc", "mef", "mrw", "rwl", "raw", "crw", "dcr"
+        "kdc", "mef", "mrw", "rwl", "raw", "crw", "dcr", "pgm"
     ]
     
     public static let allowedVideoExtensions = [

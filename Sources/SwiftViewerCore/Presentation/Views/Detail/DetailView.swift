@@ -107,6 +107,7 @@ struct ZoomableImageView: View {
     @State private var hoverLocation: CGPoint = .zero
     @State private var scrollMonitor: Any?
     @State private var useNearestNeighbor: Bool = false
+    @State private var bitmapRep: NSBitmapImageRep? = nil
     
     var body: some View {
         GeometryReader { geometry in
@@ -342,10 +343,11 @@ struct ZoomableImageView: View {
                 // 切り替え直後にドラッグ中の差分だけ残るのは不自然なのでここでクリアする。
                 dragOffset = .zero
             }
-            .onAppear { 
-                viewSize = geometry.size 
+            .onAppear {
+                viewSize = geometry.size
                 if let img = image {
                     restoreZoomStateIfNeeded(nsImage: img, viewSize: geometry.size)
+                    if bitmapRep == nil { rebuildBitmapRep(from: img) }
                 }
                 updateViewModelScale(newSize: geometry.size)
             }
@@ -366,6 +368,9 @@ struct ZoomableImageView: View {
             .onChange(of: image) { _, _ in
                 if let img = image {
                     restoreZoomStateIfNeeded(nsImage: img, viewSize: viewSize)
+                    rebuildBitmapRep(from: img)
+                } else {
+                    bitmapRep = nil
                 }
                 updateViewModelScale(newSize: viewSize)
             }
@@ -387,8 +392,11 @@ struct ZoomableImageView: View {
                 case .active(let location):
                     self.hoverLocation = location
                     self.isHovering = true
+                    updateCursorDebugInfo(location: location, viewSize: geometry.size)
                 case .ended:
                     self.isHovering = false
+                    viewModel.cursorImagePoint = nil
+                    viewModel.cursorRGB = nil
                 }
             }
             .onAppear {
@@ -532,6 +540,66 @@ struct ZoomableImageView: View {
         let actual = currentScale ?? fitScale
         DispatchQueue.main.async {
             viewModel.imageZoomScale = actual
+        }
+    }
+
+    private func rebuildBitmapRep(from nsImage: NSImage) {
+        if let existing = nsImage.representations.compactMap({ $0 as? NSBitmapImageRep }).first {
+            bitmapRep = existing
+            return
+        }
+        if let cg = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            bitmapRep = NSBitmapImageRep(cgImage: cg)
+        } else {
+            bitmapRep = nil
+        }
+    }
+
+    private func updateCursorDebugInfo(location: CGPoint, viewSize: CGSize) {
+        guard let nsImage = image else {
+            viewModel.cursorImagePoint = nil
+            viewModel.cursorRGB = nil
+            return
+        }
+        let imgSize = nsImage.size
+        guard imgSize.width > 0, imgSize.height > 0 else { return }
+
+        let widthRatio = viewSize.width / imgSize.width
+        let heightRatio = viewSize.height / imgSize.height
+        let fitScale = min(widthRatio, heightRatio)
+        let actualScale = currentScale ?? fitScale
+
+        let displayWidth = imgSize.width * actualScale
+        let displayHeight = imgSize.height * actualScale
+        let displayLeft = (viewSize.width - displayWidth) / 2 + offset.width + dragOffset.width
+        let displayTop = (viewSize.height - displayHeight) / 2 + offset.height + dragOffset.height
+
+        let imgX = (location.x - displayLeft) / actualScale
+        let imgY = (location.y - displayTop) / actualScale
+
+        if imgX < 0 || imgY < 0 || imgX >= imgSize.width || imgY >= imgSize.height {
+            viewModel.cursorImagePoint = nil
+            viewModel.cursorRGB = nil
+            return
+        }
+
+        viewModel.cursorImagePoint = CGPoint(x: floor(imgX), y: floor(imgY))
+
+        guard let bitmap = bitmapRep else {
+            viewModel.cursorRGB = nil
+            return
+        }
+        let pxX = Int(imgX * CGFloat(bitmap.pixelsWide) / imgSize.width)
+        let pxY = Int(imgY * CGFloat(bitmap.pixelsHigh) / imgSize.height)
+        let cx = max(0, min(bitmap.pixelsWide - 1, pxX))
+        let cy = max(0, min(bitmap.pixelsHigh - 1, pxY))
+        if let color = bitmap.colorAt(x: cx, y: cy)?.usingColorSpace(.sRGB) {
+            let r = UInt8(max(0, min(255, color.redComponent * 255)))
+            let g = UInt8(max(0, min(255, color.greenComponent * 255)))
+            let b = UInt8(max(0, min(255, color.blueComponent * 255)))
+            viewModel.cursorRGB = PixelRGB(r: r, g: g, b: b)
+        } else {
+            viewModel.cursorRGB = nil
         }
     }
 }

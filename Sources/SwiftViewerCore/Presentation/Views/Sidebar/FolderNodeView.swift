@@ -10,20 +10,10 @@ struct FolderNodeView: View {
     let folder: FileItem
     @ObservedObject var viewModel: MainViewModel
     let nodePath: String
-    
+
     @State private var isExpanded: Bool = false
-    
     @State private var subNodes: [UIFolderNode]? = nil
-    
-    // Alert States
-    @State private var showRenameAlert = false
-    @State private var newFolderName = ""
-    
-    @State private var showNewFolderAlert = false
-    @State private var newSubFolderName = ""
-    
-    @State private var showDeleteAlert = false
-    
+
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
             if let subNodes = subNodes {
@@ -58,52 +48,66 @@ struct FolderNodeView: View {
             .foregroundStyle(viewModel.currentFolder?.url == folder.url ? .white : .primary)
             .cornerRadius(6)
             .onDrop(of: [.fileURL], delegate: FolderDropDelegate(targetFolder: folder, viewModel: viewModel))
-            .contextMenu {
-                Button("Rename") {
-                    newFolderName = folder.name
-                    showRenameAlert = true
-                }
-                
-                Button("New Folder...") {
-                    newSubFolderName = ""
-                    showNewFolderAlert = true
-                }
-                
-                Divider()
-                
-                Button("Delete", role: .destructive) {
-                    showDeleteAlert = true
-                }
-            }
-            .alert("Rename Folder", isPresented: $showRenameAlert) {
-                TextField("New Name", text: $newFolderName)
-                Button("Rename") {
-                    if !newFolderName.isEmpty {
-                        viewModel.renameFolder(url: folder.url, newName: newFolderName)
+            .overlay(
+                FolderContextMenu(
+                    onRename: {
+                        let folderURL = folder.url
+                        let currentName = folder.name
+                        DispatchQueue.main.async {
+                            let alert = NSAlert()
+                            alert.messageText = "Rename Folder"
+                            let tf = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+                            tf.stringValue = currentName
+                            alert.accessoryView = tf
+                            alert.addButton(withTitle: "Rename")
+                            alert.addButton(withTitle: "Cancel")
+                            alert.window.initialFirstResponder = tf
+                            if alert.runModal() == .alertFirstButtonReturn {
+                                let newName = tf.stringValue.trimmingCharacters(in: .whitespaces)
+                                if !newName.isEmpty {
+                                    viewModel.renameFolder(url: folderURL, newName: newName)
+                                }
+                            }
+                        }
+                    },
+                    onNewFolder: {
+                        let folderURL = folder.url
+                        DispatchQueue.main.async {
+                            let alert = NSAlert()
+                            alert.messageText = "New Folder"
+                            let tf = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+                            tf.placeholderString = "Folder Name"
+                            alert.accessoryView = tf
+                            alert.addButton(withTitle: "Create")
+                            alert.addButton(withTitle: "Cancel")
+                            alert.window.initialFirstResponder = tf
+                            if alert.runModal() == .alertFirstButtonReturn {
+                                let name = tf.stringValue.trimmingCharacters(in: .whitespaces)
+                                if !name.isEmpty {
+                                    viewModel.createFolder(at: folderURL, name: name)
+                                    isExpanded = true
+                                    loadSubfolders()
+                                }
+                            }
+                        }
+                    },
+                    onMoveToTrash: {
+                        let folderURL = folder.url
+                        let name = folderURL.lastPathComponent
+                        DispatchQueue.main.async {
+                            let alert = NSAlert()
+                            alert.messageText = "Move to Trash"
+                            alert.informativeText = "Move '\(name)' to the Trash?"
+                            alert.addButton(withTitle: "Move to Trash")
+                            alert.addButton(withTitle: "Cancel")
+                            alert.alertStyle = .warning
+                            if alert.runModal() == .alertFirstButtonReturn {
+                                viewModel.moveFolderToTrash(folderURL)
+                            }
+                        }
                     }
-                }
-                Button("Cancel", role: .cancel) {}
-            }
-            .alert("New Folder", isPresented: $showNewFolderAlert) {
-                TextField("Folder Name", text: $newSubFolderName)
-                Button("Create") {
-                    if !newSubFolderName.isEmpty {
-                        viewModel.createFolder(at: folder.url, name: newSubFolderName)
-                        // Expand to show new folder
-                        isExpanded = true
-                        loadSubfolders() // Trigger reload
-                    }
-                }
-                Button("Cancel", role: .cancel) {}
-            }
-            .alert("Delete Folder", isPresented: $showDeleteAlert) {
-                Button("Delete", role: .destructive) {
-                    viewModel.deleteFolder(folder.url)
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Are you sure you want to delete '\(folder.name)'? This cannot be undone.")
-            }
+                )
+            )
         }
         .disclosureGroupStyle(CustomSidebarDisclosureStyle())
         .onChange(of: isExpanded) { _, expanded in
@@ -159,6 +163,66 @@ struct FolderNodeView: View {
                 self.subNodes = nodes
             }
         }
+    }
+}
+
+// MARK: - Folder Context Menu (NSViewRepresentable)
+// SwiftUI .contextMenu fires on the outermost List row in nested DisclosureGroups,
+// always capturing the root folder. This NSView-based approach ensures right-click
+// targets the exact folder that was clicked.
+
+class FolderMenuNSView: NSView {
+    var onRename: (() -> Void)?
+    var onNewFolder: (() -> Void)?
+    var onMoveToTrash: (() -> Void)?
+
+    // Only intercept right-click events; pass through left-click, drag, etc.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let event = NSApp.currentEvent else { return nil }
+        switch event.type {
+        case .rightMouseDown, .rightMouseUp, .rightMouseDragged:
+            return super.hitTest(point)
+        default:
+            return nil
+        }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        let menu = NSMenu()
+
+        let rename = NSMenuItem(title: "Rename", action: #selector(doRename), keyEquivalent: "")
+        rename.target = self
+        menu.addItem(rename)
+
+        let newFolder = NSMenuItem(title: "New Folder...", action: #selector(doNewFolder), keyEquivalent: "")
+        newFolder.target = self
+        menu.addItem(newFolder)
+
+        menu.addItem(.separator())
+
+        let trash = NSMenuItem(title: "Move to Trash", action: #selector(doMoveToTrash), keyEquivalent: "")
+        trash.target = self
+        menu.addItem(trash)
+
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    @objc private func doRename() { onRename?() }
+    @objc private func doNewFolder() { onNewFolder?() }
+    @objc private func doMoveToTrash() { onMoveToTrash?() }
+}
+
+struct FolderContextMenu: NSViewRepresentable {
+    var onRename: () -> Void
+    var onNewFolder: () -> Void
+    var onMoveToTrash: () -> Void
+
+    func makeNSView(context: Context) -> FolderMenuNSView { FolderMenuNSView() }
+
+    func updateNSView(_ nsView: FolderMenuNSView, context: Context) {
+        nsView.onRename = onRename
+        nsView.onNewFolder = onNewFolder
+        nsView.onMoveToTrash = onMoveToTrash
     }
 }
 
