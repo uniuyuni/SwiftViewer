@@ -261,7 +261,11 @@ struct GridItemWrapper: View {
             
             Divider()
             
-            if viewModel.appMode == .catalog {
+            if let collection = viewModel.currentCollection {
+                Button("Remove from Collection", role: .destructive) {
+                    viewModel.removeFromCollection(targetItems, collection: collection)
+                }
+            } else if viewModel.appMode == .catalog {
                 Button("Remove from Catalog", role: .destructive) {
                     viewModel.confirmDelete(targetItems)
                 }
