@@ -7,12 +7,23 @@ struct SimpleFolderTreeView: View {
     var virtualFolders: [FileItem] = []
     var isLoading: Bool = false // Added loading state
     var viewModel: AdvancedCopyViewModel? = nil
-    
+    var virtualFolderEnabledStates: [URL: Bool] = [:]
+    var onToggleVirtualFolder: ((FileItem) -> Void)? = nil
+
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 2) {
                 ForEach(rootFolders) { folder in
-                    SimpleFolderNodeView(folder: folder, selectedFolder: $selectedFolder, expandedFolders: $expandedFolders, virtualFolders: virtualFolders, isLoading: isLoading, viewModel: viewModel)
+                    SimpleFolderNodeView(
+                        folder: folder,
+                        selectedFolder: $selectedFolder,
+                        expandedFolders: $expandedFolders,
+                        virtualFolders: virtualFolders,
+                        isLoading: isLoading,
+                        viewModel: viewModel,
+                        virtualFolderEnabledStates: virtualFolderEnabledStates,
+                        onToggleVirtualFolder: onToggleVirtualFolder
+                    )
                 }
             }
             .padding(.horizontal, 10)
@@ -28,22 +39,33 @@ struct SimpleFolderNodeView: View {
     var virtualFolders: [FileItem]
     var isLoading: Bool
     var viewModel: AdvancedCopyViewModel? = nil
-    
+    var virtualFolderEnabledStates: [URL: Bool] = [:]
+    var onToggleVirtualFolder: ((FileItem) -> Void)? = nil
+
     @State private var subfolders: [FileItem]? = nil
     @State private var showNewFolderAlert = false
     @State private var newFolderName = ""
-    
+
     @State private var isExpanded: Bool = false
-    
+
     var body: some View {
         if folder.isAvailable {
             DisclosureGroup(isExpanded: $isExpanded) {
                 if let subfolders = subfolders {
                     // Merge real subfolders with virtual ones that belong here
                     let combined = mergeSubfolders(real: subfolders, virtual: virtualFolders, parent: folder.url)
-                    
+
                     ForEach(combined) { subfolder in
-                        SimpleFolderNodeView(folder: subfolder, selectedFolder: $selectedFolder, expandedFolders: $expandedFolders, virtualFolders: virtualFolders, isLoading: isLoading, viewModel: viewModel)
+                        SimpleFolderNodeView(
+                            folder: subfolder,
+                            selectedFolder: $selectedFolder,
+                            expandedFolders: $expandedFolders,
+                            virtualFolders: virtualFolders,
+                            isLoading: isLoading,
+                            viewModel: viewModel,
+                            virtualFolderEnabledStates: virtualFolderEnabledStates,
+                            onToggleVirtualFolder: onToggleVirtualFolder
+                        )
                     }
                 } else {
                     ProgressView()
@@ -56,7 +78,7 @@ struct SimpleFolderNodeView: View {
                         }
                 }
             } label: {
-                folderContent
+                folderRow
             }
             // メイン画面のツリーと同じインデント/矢印表現に揃える
             .disclosureGroupStyle(CustomSidebarDisclosureStyle())
@@ -75,12 +97,29 @@ struct SimpleFolderNodeView: View {
             }
         } else {
             // Virtual folder (not expandable)
-            folderContent
+            folderRow
                 // No padding for virtual folders to align with real subfolders
                 // .padding(.leading, 12)
         }
     }
-    
+
+    private var folderRow: some View {
+        HStack(spacing: 4) {
+            folderContent
+            if let isOn = virtualFolderEnabledStates[folder.url.standardizedFileURL],
+               let onToggle = onToggleVirtualFolder {
+                Toggle("", isOn: Binding(
+                    get: { isOn },
+                    set: { _ in onToggle(folder) }
+                ))
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+                .controlSize(.small)
+                .help("Include this folder's files in the copy")
+            }
+        }
+    }
+
     private var folderContent: some View {
         Button {
             if folder.isAvailable {

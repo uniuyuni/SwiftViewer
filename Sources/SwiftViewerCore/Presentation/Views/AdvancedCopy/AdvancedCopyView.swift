@@ -39,8 +39,6 @@ public struct AdvancedCopyView: View {
         .onChange(of: viewModel.splitEvents) { _, _ in viewModel.updatePreview() }
         .onChange(of: viewModel.eventSplitGap) { _, _ in viewModel.updatePreview() }
         .onChange(of: viewModel.dateFormat) { _, _ in viewModel.updatePreview() }
-        // For selectedFileIDs, we might want to throttle or debounce, but for now direct update is safer than didSet loop
-        .onChange(of: viewModel.selectedFileIDs) { _, _ in viewModel.updatePreview() }
         .background(WindowAccessor { window in
             if let window = window {
                 viewModel.setWindow(window)
@@ -140,6 +138,10 @@ public struct AdvancedCopyView: View {
         }
     }
     
+    private var virtualFolderEnabledStates: [URL: Bool] {
+        viewModel.virtualFolderFileMapping.mapValues { !$0.isDisjoint(with: viewModel.selectedFileIDs) }
+    }
+
     private var rightPane: some View {
         VStack {
             Text("Destination")
@@ -156,7 +158,16 @@ public struct AdvancedCopyView: View {
                 .padding(.bottom, 4)
             }
             
-            SimpleFolderTreeView(rootFolders: viewModel.destinationRootFolders, selectedFolder: $viewModel.selectedDestinationFolder, expandedFolders: $viewModel.expandedDestinationFolders, virtualFolders: viewModel.virtualFolders, isLoading: viewModel.isLoading, viewModel: viewModel)
+            SimpleFolderTreeView(
+                rootFolders: viewModel.destinationRootFolders,
+                selectedFolder: $viewModel.selectedDestinationFolder,
+                expandedFolders: $viewModel.expandedDestinationFolders,
+                virtualFolders: viewModel.virtualFolders,
+                isLoading: viewModel.isLoading,
+                viewModel: viewModel,
+                virtualFolderEnabledStates: virtualFolderEnabledStates,
+                onToggleVirtualFolder: { viewModel.toggleVirtualFolder($0) }
+            )
             
             Divider()
             

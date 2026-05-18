@@ -33,15 +33,7 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
 
     // Files
     @Published var files: [FileItem] = []
-    @Published var selectedFileIDs: Set<String> = [] {
-        didSet {
-            // Debounce or throttle might be good, but for now direct update
-            // Use Task to avoid blocking UI during selection
-            Task { @MainActor in
-                updatePreview()
-            }
-        }
-    }
+    @Published var selectedFileIDs: Set<String> = []
     @Published var isLoading: Bool = false
 
     // Destination
@@ -59,6 +51,25 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
     @Published var thumbnailSize: CGFloat = 100.0
 
     @Published var virtualFolders: [FileItem] = []
+
+    // Maps a virtual folder URL to the set of source file IDs that would land in it.
+    // Built from ALL source files (not just selected) so the destination preview stays
+    // visible even when its files are unchecked via the folder-level checkbox.
+    @Published var virtualFolderFileMapping: [URL: Set<String>] = [:]
+
+    func isVirtualFolderEnabled(_ folder: FileItem) -> Bool {
+        guard let fileIDs = virtualFolderFileMapping[folder.url.standardizedFileURL] else { return true }
+        return !fileIDs.isDisjoint(with: selectedFileIDs)
+    }
+
+    func toggleVirtualFolder(_ folder: FileItem) {
+        guard let fileIDs = virtualFolderFileMapping[folder.url.standardizedFileURL] else { return }
+        if isVirtualFolderEnabled(folder) {
+            selectedFileIDs.subtract(fileIDs)
+        } else {
+            selectedFileIDs.formUnion(fileIDs)
+        }
+    }
 
     // Options
     @Published var addToCatalog: Bool = false
@@ -312,9 +323,9 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
     }
 
     // Caching
-    private var lastProcessedFileIDs: Set<String> = []
     private var lastProcessedDestination: URL?
     private var lastProcessedOptions: String = ""  // Composite key of options that affect structure
+    private var lastProcessedFilesSignature: Int = 0  // Bumped each time `files` is reloaded
 
     private var loadingTask: Task<Void, Never>?
 
@@ -323,31 +334,33 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
     func updatePreview(force: Bool = false) {
         guard let destination = selectedDestinationFolder else {
             virtualFolders = []
+            virtualFolderFileMapping = [:]
             return
         }
 
         Logger.shared.log(
-            "AdvancedCopyViewModel: updatePreview called. Selected: \(selectedFileIDs.count), Dest: \(destination.path)"
+            "AdvancedCopyViewModel: updatePreview called. Files: \(files.count), Dest: \(destination.path)"
         )
 
         // Construct a unique key for the current options that affect folder structure
-        let currentOptions = "\(organizeByDate)-\(splitEvents)-\(eventSplitGap)"
+        let currentOptions = "\(organizeByDate)-\(splitEvents)-\(eventSplitGap)-\(dateFormat)"
+        let currentSignature = filesSignature
 
-        // Check cache
-        if !force && selectedFileIDs == lastProcessedFileIDs
-            && destination == lastProcessedDestination && currentOptions == lastProcessedOptions
+        // Check cache (selection no longer affects the structure)
+        if !force && destination == lastProcessedDestination
+            && currentOptions == lastProcessedOptions
+            && currentSignature == lastProcessedFilesSignature
         {
             Logger.shared.log("AdvancedCopyViewModel: Using cached preview.")
-            return  // Skip if nothing relevant changed
+            return
         }
 
-        // Only proceed if organizeByDate is true and there are files selected
-        guard organizeByDate, !selectedFileIDs.isEmpty else {
+        guard organizeByDate, !files.isEmpty else {
             virtualFolders = []
-            // Update cache even if empty, to reflect the current state
-            self.lastProcessedFileIDs = self.selectedFileIDs
+            virtualFolderFileMapping = [:]
             self.lastProcessedDestination = destination
             self.lastProcessedOptions = currentOptions
+            self.lastProcessedFilesSignature = currentSignature
             return
         }
 
@@ -357,7 +370,6 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
 
         // Capture values to avoid data race
         let currentFiles = files
-        let currentSelection = selectedFileIDs
         let currentDateFormat = dateFormat
         let currentSplitEvents = splitEvents
         let currentGap = eventSplitGap
@@ -365,50 +377,43 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
         previewTask = Task.detached(priority: .userInitiated) {
             if Task.isCancelled { return }
 
-            let filesToCopy = currentFiles.filter { currentSelection.contains($0.id) }
+            let filesToProcess = currentFiles
             Logger.shared.log(
-                "AdvancedCopyViewModel: Generating preview for \(filesToCopy.count) files.")
+                "AdvancedCopyViewModel: Generating preview for \(filesToProcess.count) files.")
 
-            if filesToCopy.isEmpty {
+            if filesToProcess.isEmpty {
                 await MainActor.run {
                     self.virtualFolders = []
+                    self.virtualFolderFileMapping = [:]
                     self.isLoading = false
                 }
                 return
             }
 
-            var createdFolders: [FileItem] = []
-            var folderNames: Set<String> = []
             let formatter = DateFormatter()
             formatter.dateFormat = currentDateFormat
 
-            // Helper for detached task
             func getDetachedDate(for url: URL) async -> Date? {
-                // Use ExifReader to match the actual copy logic
                 if let metadata = await ExifReader.shared.readExif(from: url) {
                     return metadata.dateTimeOriginal
                 }
-                // Fallback to creation date if no Exif
                 return try? FileManager.default.attributesOfItem(atPath: url.path)[.creationDate]
                     as? Date
             }
 
-            // 1. Identify files needing Exif (All images)
-            let imageFiles = filesToCopy.filter {
+            let imageFiles = filesToProcess.filter {
                 let ext = $0.url.pathExtension.lowercased()
                 return FileConstants.allowedImageExtensions.contains(ext)
             }
 
-            // Optimization: If too many files, skip Exif for preview and use FileSystem date
-            // This prevents hanging on large folders.
-            let useFastPreview = filesToCopy.count > 1000
+            // Optimization: If too many files, skip Exif for preview and use FileSystem date.
+            let useFastPreview = filesToProcess.count > 1000
             if useFastPreview {
                 Logger.shared.log(
-                    "AdvancedCopyViewModel: Large dataset (\(filesToCopy.count) items). Using FileSystem dates for preview."
+                    "AdvancedCopyViewModel: Large dataset (\(filesToProcess.count) items). Using FileSystem dates for preview."
                 )
             }
 
-            // 2. Batch read Exif for ALL images (Only if not fast preview)
             var exifData: [URL: ExifMetadata] = [:]
             if !useFastPreview {
                 let imageURLs = imageFiles.map { $0.url }
@@ -423,78 +428,67 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
             }
 
             var filesWithDates: [(FileItem, Date)] = []
-
-            // 3. Process all files to get dates
-            for file in filesToCopy {
+            for file in filesToProcess {
                 if Task.isCancelled { return }
-
                 var date: Date?
-
-                // Check if we have batch loaded Exif
                 if let meta = exifData[file.url], let dt = meta.dateTimeOriginal {
                     date = dt
+                } else if let creation = file.creationDate {
+                    date = creation
                 } else {
-                    // Fallback to FileItem creationDate (Fastest)
-                    if let creation = file.creationDate {
-                        date = creation
-                    } else {
-                        // Last resort: Disk read (Slow)
-                        date = await getDetachedDate(for: file.url)
-                    }
+                    date = await getDetachedDate(for: file.url)
                 }
-
                 filesWithDates.append((file, date ?? Date.distantPast))
             }
+
+            // Group files by destination folder name
+            var folderNameToFiles: [String: [FileItem]] = [:]
 
             if currentSplitEvents {
                 let sortedFiles = filesWithDates.sorted { $0.1 < $1.1 }
 
                 var eventStartDate: Date?
                 var lastDate: Date?
+                var currentEventFiles: [FileItem] = []
 
-                for (_, date) in sortedFiles {
+                func closeEvent() {
+                    if let start = eventStartDate, !currentEventFiles.isEmpty {
+                        formatter.dateFormat = "yyyy-MM-dd_HHmm"
+                        let name = formatter.string(from: start)
+                        folderNameToFiles[name, default: []].append(contentsOf: currentEventFiles)
+                    }
+                    currentEventFiles = []
+                }
+
+                for (file, date) in sortedFiles {
                     if Task.isCancelled { return }
                     if date == Date.distantPast { continue }
 
                     if let last = lastDate {
                         let gap = date.timeIntervalSince(last)
-                        if gap > Double(currentGap * 60) {  // Gap is in minutes
-                            if let start = eventStartDate {
-                                formatter.dateFormat = "yyyy-MM-dd_HHmm"
-                                let name = formatter.string(from: start)
-                                folderNames.insert(name)
-                            }
+                        if gap > Double(currentGap * 60) {
+                            closeEvent()
                             eventStartDate = date
                         }
                     } else {
                         eventStartDate = date
                     }
+                    currentEventFiles.append(file)
                     lastDate = date
                 }
-
-                if let start = eventStartDate {
-                    formatter.dateFormat = "yyyy-MM-dd_HHmm"
-                    let name = formatter.string(from: start)
-                    folderNames.insert(name)
-                }
-
+                closeEvent()
             } else {
-                // Simple date grouping
-                for (_, date) in filesWithDates {
+                for (file, date) in filesWithDates {
                     if Task.isCancelled { return }
                     if date != Date.distantPast {
-                        folderNames.insert(formatter.string(from: date))
+                        let name = formatter.string(from: date)
+                        folderNameToFiles[name, default: []].append(file)
                     }
                 }
             }
 
-            // Ensure isLoading is reset
             defer {
                 Task { @MainActor in
-                    // Only reset if we are still the active task?
-                    // No, simpler: just reset. If a new task started, it set isLoading=true.
-                    // But if we set it to false, we might hide the new task's loading.
-                    // However, we check Task.isCancelled.
                     if !Task.isCancelled {
                         self.isLoading = false
                     }
@@ -503,40 +497,39 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
 
             if Task.isCancelled { return }
 
-            Logger.shared.log("AdvancedCopyViewModel: Generated folder names: \(folderNames)")
+            Logger.shared.log("AdvancedCopyViewModel: Generated folder names: \(folderNameToFiles.keys)")
 
-            // Create FileItems for the folders
-            // Include folders that DO NOT EXIST on disk as virtual.
-            // Existing folders will be shown by SimpleFolderTreeView reading from disk.
-            // BUT we want to mark them as CONFLICT if they exist.
-            // SimpleFolderTreeView merges virtual and real. If virtual has isConflict=true, it overrides.
+            // Build virtualFolders and the URL → file-IDs mapping in one pass.
+            var createdFolders: [FileItem] = []
+            var mapping: [URL: Set<String>] = [:]
 
-            createdFolders = folderNames.compactMap { name in
+            for (name, fileItems) in folderNameToFiles {
+                if Task.isCancelled { return }
                 let url = destination.appendingPathComponent(name).standardizedFileURL
+                mapping[url] = Set(fileItems.map { $0.id })
+
                 var isDir: ObjCBool = false
                 if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) {
-                    // Exists! Mark as conflict.
                     var item = FileItem(url: url, isDirectory: true, isAvailable: true)
                     item.isConflict = true
-                    return item
+                    createdFolders.append(item)
                 } else {
-                    return FileItem(url: url, isDirectory: true, isAvailable: false)
+                    createdFolders.append(FileItem(url: url, isDirectory: true, isAvailable: false))
                 }
             }
 
             let result = createdFolders.sorted { $0.name < $1.name }
 
             await MainActor.run {
-                // Check if still relevant (though cancellation handles most cases)
                 guard !Task.isCancelled else { return }
                 guard self.selectedDestinationFolder == destination else { return }
 
-                // Update virtual folders
                 self.virtualFolders = result
+                self.virtualFolderFileMapping = mapping
 
-                self.lastProcessedFileIDs = currentSelection
                 self.lastProcessedDestination = destination
                 self.lastProcessedOptions = currentOptions
+                self.lastProcessedFilesSignature = currentSignature
                 let conflictCount = result.filter { $0.isConflict }.count
                 Logger.shared.log(
                     "AdvancedCopyViewModel: Preview updated with \(result.count) virtual folders (\(conflictCount) conflicts)."
@@ -544,6 +537,8 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
             }
         }
     }
+
+    private var filesSignature: Int = 0
 
     private func getDate(for url: URL) async -> Date? {
         if let metadata = await ExifReader.shared.readExif(from: url) {
@@ -730,6 +725,7 @@ class AdvancedCopyViewModel: NSObject, ObservableObject {
                     guard self.selectedSourceFolder == url else { return }
 
                     self.files = sortedFiles
+                    self.filesSignature &+= 1
                     // Auto-select all files by default
                     self.selectedFileIDs = Set(sortedFiles.map { $0.id })
                     self.isLoading = false
