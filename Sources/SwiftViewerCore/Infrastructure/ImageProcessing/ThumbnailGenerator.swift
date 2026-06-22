@@ -44,7 +44,7 @@ class ThumbnailGenerator {
         await concurrencyManager.enter()
         defer { Task { await concurrencyManager.exit() } }
         
-        let key = "\(url.path)_\(Int(size.width))x\(Int(size.height))_v14"
+        let key = "\(url.path)_\(Int(size.width))x\(Int(size.height))_v15"
         
         // Check cache (Fast, no await if ImageCacheService is fast)
         if let cached = ImageCacheService.shared.image(forKey: key) {
@@ -188,7 +188,7 @@ class ThumbnailGenerator {
         await concurrencyManager.enter()
         defer { Task { await concurrencyManager.exit() } }
         
-        let key = "\(url.path)_\(Int(size.width))x\(Int(size.height))_v4"
+        let key = "\(url.path)_\(Int(size.width))x\(Int(size.height))_v5"
         
         // Check cache for image
         let cachedImage = ImageCacheService.shared.image(forKey: key)

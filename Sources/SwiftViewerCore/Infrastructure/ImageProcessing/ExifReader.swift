@@ -225,7 +225,8 @@ class ExifReader {
         if let exif = props[kCGImagePropertyExifDictionary as String] as? [String: Any] {
             metadata.focalLength = exif[kCGImagePropertyExifFocalLength as String] as? Double
             metadata.aperture = exif[kCGImagePropertyExifFNumber as String] as? Double
-            metadata.iso = (exif[kCGImagePropertyExifISOSpeedRatings as String] as? [Int])?.first
+            // Take the last positive value: some cameras store [0, actualISO].
+            metadata.iso = (exif[kCGImagePropertyExifISOSpeedRatings as String] as? [Int])?.filter { $0 > 0 }.last
             
             if let shutter = exif[kCGImagePropertyExifExposureTime as String] as? Double {
                 metadata.shutterSpeed = ExifReader.shared.formatShutterSpeed(shutter)
@@ -273,7 +274,8 @@ class ExifReader {
     // Explicitly list tags to ensure consistent behavior (Numeric vs String)
     private let exifTags = [
         "-Make", "-Model", "-LensMake", "-LensModel", "-Software",
-        "-FocalLength#", "-FNumber#", "-ExposureTime#", "-ISO#", // Numeric for calculations
+        "-FocalLength#", "-FNumber#", "-ExposureTime#", // Numeric for calculations
+        "-ISO", // Print-conv (NOT #): Pentax stores an encoded raw value (6=ISO100, 9=200, …) and old Nikons return "0 200"; print-conversion yields the real ISO.
         "-ShutterSpeed#", "-Aperture#", // Composite tags for robustness
         "-DateTimeOriginal",
         "-RawImageWidth#", "-RawImageHeight#", "-ExifImageWidth#", "-ExifImageHeight#", "-ImageWidth#", "-ImageHeight#", // Numeric for dimensions
@@ -461,6 +463,26 @@ class ExifReader {
         }
     }
     
+    /// Robustly parse an ISO value from ExifTool output.
+    /// Handles Int/Double, arrays (e.g. [0, 200]) and multi-value strings (e.g. "0 200"),
+    /// returning the last positive integer. Zero/absent values yield nil (treated as Unknown).
+    internal func parseISO(_ value: Any?) -> Int? {
+        switch value {
+        case let v as Int:
+            return v > 0 ? v : nil
+        case let v as Double:
+            let i = Int(v)
+            return i > 0 ? i : nil
+        case let arr as [Any]:
+            return arr.compactMap { parseISO($0) }.last
+        case let s as String:
+            let ints = s.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }.filter { $0 > 0 }
+            return ints.last
+        default:
+            return nil
+        }
+    }
+
     private func parseExifToolOutput(_ output: [String: Any]) -> ExifMetadata {
         var meta = ExifMetadata()
         meta.rawProps = output
@@ -510,7 +532,9 @@ class ExifReader {
         }
         
         // ISO
-        meta.iso = getInt("ISO")
+        // Defensive: some cameras (e.g. older Nikon) report ISO as a multi-value
+        // string like "0 200" where the meaningful value is the last positive integer.
+        meta.iso = parseISO(output["ISO"])
         
         // Dimensions
         let w = getInt("RawImageWidth") ?? getInt("ExifImageWidth") ?? getInt("ImageWidth")

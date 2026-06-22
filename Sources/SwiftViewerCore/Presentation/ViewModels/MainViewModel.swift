@@ -1458,13 +1458,25 @@ public class MainViewModel: ObservableObject {
     @Published var filterTabSelection: Int = 0
 
     // Computed properties for available metadata
+
+    /// 現在のフォルダ/スコープに属する写真の metadata のみを返す。
+    /// Folders / Photos モードは metadataCache が他フォルダ分を蓄積するため allFiles で絞る。
+    /// Catalog / Collection モードは populateMetadataCache がスコープ分でキャッシュを丸ごと置換済みのため全体を使う。
+    private var metadataInScope: [ExifMetadata] {
+        if appMode == .folders || selectedPhotosGroupID != nil {
+            return allFiles.compactMap { metadataCache[$0.url.standardizedFileURL] }
+        }
+        return Array(metadataCache.values)
+    }
+
     var availableDates: [String] {
-        let dates = metadataCache.values.compactMap { $0.dateTimeOriginal }
+        let scope = metadataInScope
+        let dates = scope.compactMap { $0.dateTimeOriginal }
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         var result = Array(Set(dates.map { formatter.string(from: $0) })).sorted(by: >)
 
-        let hasUnknown = metadataCache.values.contains { $0.dateTimeOriginal == nil }
+        let hasUnknown = scope.contains { $0.dateTimeOriginal == nil }
         if hasUnknown {
             result.insert("Unknown", at: 0)
         }
@@ -1477,43 +1489,48 @@ public class MainViewModel: ObservableObject {
     }
 
     var availableMakers: [String] {
-        let makers = metadataCache.values.compactMap { $0.cameraMake }
+        let scope = metadataInScope
+        let makers = scope.compactMap { $0.cameraMake }
         var result = Array(Set(makers)).sorted()
-        if metadataCache.values.contains(where: { $0.cameraMake == nil }) {
+        if scope.contains(where: { $0.cameraMake == nil }) {
             result.insert("Unknown", at: 0)
         }
         return result
     }
 
     var availableCameras: [String] {
-        let cameras = metadataCache.values.compactMap { $0.cameraModel }
+        let scope = metadataInScope
+        let cameras = scope.compactMap { $0.cameraModel }
         var result = Array(Set(cameras)).sorted()
-        if metadataCache.values.contains(where: { $0.cameraModel == nil }) {
+        if scope.contains(where: { $0.cameraModel == nil }) {
             result.insert("Unknown", at: 0)
         }
         return result
     }
 
     var availableLenses: [String] {
-        let lenses = metadataCache.values.compactMap { $0.lensModel }
+        let scope = metadataInScope
+        let lenses = scope.compactMap { $0.lensModel }
         var result = Array(Set(lenses)).sorted()
-        if metadataCache.values.contains(where: { $0.lensModel == nil }) {
+        if scope.contains(where: { $0.lensModel == nil }) {
             result.insert("Unknown", at: 0)
         }
         return result
     }
 
     var availableISOs: [String] {
-        let isos = metadataCache.values.compactMap { $0.iso }.map { String($0) }
+        let scope = metadataInScope
+        let isos = scope.compactMap { $0.iso }.map { String($0) }
         var result = Array(Set(isos)).sorted { (Int($0) ?? 0) < (Int($1) ?? 0) }
-        if metadataCache.values.contains(where: { $0.iso == nil }) {
+        if scope.contains(where: { $0.iso == nil }) {
             result.insert("Unknown", at: 0)
         }
         return result
     }
 
     var availableShutterSpeeds: [String] {
-        let speeds = metadataCache.values.compactMap { $0.shutterSpeed }
+        let scope = metadataInScope
+        let speeds = scope.compactMap { $0.shutterSpeed }
         let uniqueValues = Set(speeds)
         var result = uniqueValues.sorted { s1, s2 in
             let v1 = parseShutterSpeed(s1)
@@ -1521,7 +1538,7 @@ public class MainViewModel: ObservableObject {
             return v1 < v2
         }
 
-        if metadataCache.values.contains(where: { $0.shutterSpeed == nil }) {
+        if scope.contains(where: { $0.shutterSpeed == nil }) {
             result.insert("Unknown", at: 0)
         }
         return result
@@ -1554,18 +1571,20 @@ public class MainViewModel: ObservableObject {
     }
 
     var availableApertures: [String] {
-        let apertures = metadataCache.values.compactMap { $0.aperture }
+        let scope = metadataInScope
+        let apertures = scope.compactMap { $0.aperture }
         var result = Array(Set(apertures)).sorted().map { String(format: "f/%.1f", $0) }
-        if metadataCache.values.contains(where: { $0.aperture == nil }) {
+        if scope.contains(where: { $0.aperture == nil }) {
             result.insert("Unknown", at: 0)
         }
         return result
     }
 
     var availableFocalLengths: [String] {
-        let lengths = metadataCache.values.compactMap { $0.focalLength }
+        let scope = metadataInScope
+        let lengths = scope.compactMap { $0.focalLength }
         var result = Array(Set(lengths)).sorted().map { String(format: "%.0f mm", $0) }
-        if metadataCache.values.contains(where: { $0.focalLength == nil }) {
+        if scope.contains(where: { $0.focalLength == nil }) {
             result.insert("Unknown", at: 0)
         }
         return result

@@ -37,6 +37,7 @@ private struct SubZoomableImageView: View {
     @State private var offset: CGSize = .zero
     @State private var dragOffset: CGSize = .zero
     @State private var isOffline: Bool = false
+    @State private var noPreview: Bool = false
     @State private var viewSize: CGSize = .zero
     
     var body: some View {
@@ -151,7 +152,19 @@ private struct SubZoomableImageView: View {
                         }
                     }
                 } else {
-                    if isOffline {
+                    if noPreview {
+                        VStack {
+                            Image(systemName: "eye.slash")
+                                .font(.largeTitle)
+                                .foregroundStyle(.secondary)
+                            Text("No Preview Available")
+                                .font(.title2)
+                                .foregroundStyle(.secondary)
+                            Text("This file has no preview image.")
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if isOffline {
                         VStack {
                             Image(systemName: "externaldrive.badge.xmark")
                                 .font(.largeTitle)
@@ -192,10 +205,14 @@ private struct SubZoomableImageView: View {
                 }
             }
             .task(id: url) {
+                // Reset the no-preview flag for the newly selected file.
+                // (Do NOT clear `image` here to avoid flicker on normal navigation.)
+                self.noPreview = false
+
                 // 1. Check if RAW. If so, prioritize Embedded Preview for speed.
                 let ext = url.pathExtension.lowercased()
                 let isRaw = FileConstants.rawExtensions.contains(ext)
-                
+
                 if isRaw {
                     if let screen = NSScreen.main {
                         let size = screen.frame.size
@@ -221,14 +238,29 @@ private struct SubZoomableImageView: View {
                     return
                 }
                 
-                // 4. Offline/Cache
+                // 4. All decode/extract attempts failed. Distinguish two cases:
+                if FileManager.default.fileExists(atPath: url.path) {
+                    // File is present but no preview could be produced.
+                    self.image = nil
+                    self.isOffline = false
+                    self.noPreview = true
+                    return
+                }
+
+                // Genuinely offline (original missing): try cached thumbnail.
                 self.isOffline = true
+                self.noPreview = false
                 if let id = itemID {
                     if let preview = ThumbnailCacheService.shared.loadThumbnail(for: id, type: .preview) {
                         self.image = preview
                     } else if let cached = ThumbnailCacheService.shared.loadThumbnail(for: id, type: .thumbnail) {
                         self.image = cached
+                    } else {
+                        // No cache: clear so the previous image does not linger.
+                        self.image = nil
                     }
+                } else {
+                    self.image = nil
                 }
             }
         }

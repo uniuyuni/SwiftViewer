@@ -3,111 +3,91 @@ import AppKit
 
 class EmbeddedPreviewExtractor {
     static let shared = EmbeddedPreviewExtractor()
-    
+
     // Known JPEG signatures
     private let jpegStart: [UInt8] = [0xFF, 0xD8]
     private let jpegEnd: [UInt8] = [0xFF, 0xD9]
-    
-    enum PreviewType {
-        case thumbnail
-        case preview
-    }
-    
-    func extractThumbnail(from url: URL) -> NSImage? {
-        // 1. Try ExifTool with ThumbnailImage
-        if let result = extractUsingExifTool(url: url, type: .thumbnail, skipRotation: false) {
-            return result.0
-        }
-        // 2. Fallback: Binary Scan (might return large preview, but better than nothing)
-        if let result = extractUsingBinaryScan(url: url, skipRotation: false) {
-            return result.0
-        }
-        return nil
-    }
-    
+
+    private let exifToolPath = "/usr/local/bin/exiftool"
+
+    /// Candidate embedded-image tags. The largest one (by byte size) wins.
+    /// Preview-class tags plus ThumbnailTIFF (TIFF previews are NOT findable by the
+    /// binary FFD8…FFD9 scan, so they can only be retrieved by tag).
+    /// Order is used only as a tie-breaker.
+    private let previewTags = [
+        "PreviewImage", "JpgFromRaw", "JpgFromRaw2", "OtherImage", "PreviewTIFF", "ThumbnailTIFF"
+    ]
+
     func extractPreview(from url: URL) -> NSImage? {
         return extractPreview(from: url, skipRotation: false).0
     }
 
     func extractPreview(from url: URL, skipRotation: Bool) -> (NSImage?, Int?) {
-        // 1. Try ExifTool with PreviewImage/JpgFromRaw
-        if let result = extractUsingExifTool(url: url, type: .preview, skipRotation: skipRotation) {
+        // 1. ExifTool: extract the LARGEST embedded image among the candidate tags.
+        if let result = extractLargestEmbedded(url: url, skipRotation: skipRotation) {
             return result
         }
-        // 2. Fallback: Binary Scan
+        // 2. Fallback: Binary Scan (largest FFD8…FFD9 JPEG block)
         return extractUsingBinaryScan(url: url, skipRotation: skipRotation) ?? (nil, nil)
     }
-    
-    private func extractUsingExifTool(url: URL, type: PreviewType, skipRotation: Bool) -> (NSImage?, Int?)? {
-        // Check if exiftool exists (simple check, maybe cache this)
-        let exifToolPath = "/usr/local/bin/exiftool"
+
+    /// Pick the candidate tag holding the largest embedded image, then extract just that one.
+    private func extractLargestEmbedded(url: URL, skipRotation: Bool) -> (NSImage?, Int?)? {
         guard FileManager.default.fileExists(atPath: exifToolPath) else { return nil }
-        
+        guard let bestTag = largestPreviewTag(url: url) else { return nil }
+        return extractUsingExifToolTag(url: url, tag: "-" + bestTag, skipRotation: skipRotation)
+    }
+
+    /// Query the byte sizes of all candidate tags in one ExifTool call (no `-b`) and
+    /// return the name of the tag with the largest embedded image, or nil if none exist.
+    /// Internal for testability.
+    func largestPreviewTag(url: URL) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: exifToolPath)
-        
-        var args: [String] = ["-b"]
-        switch type {
-        case .thumbnail:
-            args.append("-ThumbnailImage")
-            args.append(url.path)
-        case .preview:
-            // For RAF, use PreviewImage (usually full size or large preview)
-            if url.pathExtension.lowercased() == "raf" {
-                args.append("-PreviewImage")
-                args.append(url.path)
-            } else {
-                // Try PreviewImage first for others
-                args.append("-PreviewImage")
-                args.append(url.path)
-            }
-        }
-        
+        var args = ["-j"]
+        args.append(contentsOf: previewTags.map { "-" + $0 })
+        args.append(url.path)
         process.arguments = args
-        
+
         let pipe = Pipe()
-        let errorPipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = errorPipe
-        
+        process.standardError = Pipe()
+
         do {
             try process.run()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
-            
-            if !data.isEmpty, let image = NSImage(data: data) {
-                if skipRotation {
-                    let orientation = getOrientation(from: data, url: url)
-                    return (image, orientation)
-                } else {
-                    return (fixOrientation(of: image, from: data, url: url), nil)
-                }
-            } else {
-                // If PreviewImage failed, try JpgFromRaw for previews (or PreviewImage if we tried JpgFromRaw first)
-                if type == .preview {
-                    let ext = url.pathExtension.lowercased()
-                    let tag = (ext == "raf") ? "-JpgFromRaw" : "-JpgFromRaw"
-                    print("DEBUG: ExifTool primary tag failed for \(url.lastPathComponent), trying \(tag)")
-                    return extractUsingExifToolTag(url: url, tag: tag, skipRotation: skipRotation)
-                }
-                
-                // Log error if needed
-                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                if let errorStr = String(data: errorData, encoding: .utf8), !errorStr.isEmpty {
-                    print("DEBUG: ExifTool error for \(url.lastPathComponent): \(errorStr)")
-                }
+
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+                  let obj = json.first else { return nil }
+
+            var bestTag: String? = nil
+            var bestSize = 0
+            for tag in previewTags {
+                // Binary tags appear as "(Binary data N bytes, use -b to extract)" when not using -b.
+                guard let value = obj[tag] as? String,
+                      let size = parseBinaryByteCount(value), size > bestSize else { continue }
+                bestSize = size
+                bestTag = tag
             }
+            return bestTag
         } catch {
-            print("DEBUG: ExifTool execution failed: \(error)")
+            print("DEBUG: ExifTool size query failed for \(url.lastPathComponent): \(error)")
             return nil
         }
-        
-        return nil
     }
-    
+
+    /// Extract the byte count from ExifTool's "(Binary data N bytes, use -b to extract)" placeholder.
+    /// Internal for testability.
+    func parseBinaryByteCount(_ s: String) -> Int? {
+        guard let range = s.range(of: #"(\d+) bytes"#, options: .regularExpression) else { return nil }
+        let digits = s[range].prefix(while: { $0.isNumber })
+        return Int(digits)
+    }
+
     private func extractUsingExifToolTag(url: URL, tag: String, skipRotation: Bool) -> (NSImage?, Int?)? {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/local/bin/exiftool")
+        process.executableURL = URL(fileURLWithPath: exifToolPath)
         process.arguments = ["-b", tag, url.path]
         
         let pipe = Pipe()
@@ -180,7 +160,7 @@ class EmbeddedPreviewExtractor {
     
     private func getExifToolTag(url: URL, tag: String) -> Int? {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/local/bin/exiftool")
+        process.executableURL = URL(fileURLWithPath: exifToolPath)
         process.arguments = ["-b", "-n", tag, url.path] // -n for numeric
         
         let pipe = Pipe()

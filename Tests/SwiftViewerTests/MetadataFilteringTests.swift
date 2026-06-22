@@ -454,4 +454,73 @@ final class MetadataFilteringTests: XCTestCase {
         // または区別しない場合
         // XCTAssertEqual(viewModel.fileItems.count, 1)
     }
+
+    // MARK: - 選択肢（available*）のスコープ絞り込み
+
+    /// Folders モードでは、metadataCache に他フォルダの残骸があっても、
+    /// available* は現在の allFiles（＝現在フォルダ）に存在する値のみを返す。
+    func testAvailableOptions_FoldersMode_ScopedToCurrentFolder() {
+        let urlA = URL(fileURLWithPath: "/folderA/canon.jpg")
+        let urlB = URL(fileURLWithPath: "/folderB/nikon.jpg")
+
+        var metaA = ExifMetadata()
+        metaA.cameraMake = "Canon"
+        metaA.cameraModel = "EOS R5"
+        metaA.lensModel = "RF 24-70mm f/2.8L"
+        metaA.iso = 100
+        metaA.aperture = 2.8
+        metaA.focalLength = 35
+
+        var metaB = ExifMetadata()
+        metaB.cameraMake = "Nikon"
+        metaB.cameraModel = "D850"
+        metaB.lensModel = "AF-S 50mm f/1.8"
+        metaB.iso = 6400
+        metaB.aperture = 1.8
+        metaB.focalLength = 50
+
+        // キャッシュには A + B の両方（B は以前のフォルダ閲覧で蓄積された残骸を模す）
+        viewModel.metadataCache[urlA] = metaA
+        viewModel.metadataCache[urlB] = metaB
+
+        // 現在フォルダ（allFiles）は A のみ
+        viewModel.allFiles = [FileItem(url: urlA, isDirectory: false)]
+        viewModel.appMode = .folders
+        viewModel.selectedPhotosGroupID = nil
+
+        XCTAssertEqual(viewModel.availableMakers, ["Canon"])
+        XCTAssertEqual(viewModel.availableCameras, ["EOS R5"])
+        XCTAssertEqual(viewModel.availableLenses, ["RF 24-70mm f/2.8L"])
+        XCTAssertEqual(viewModel.availableISOs, ["100"])
+        XCTAssertEqual(viewModel.availableApertures, ["f/2.8"])
+        XCTAssertEqual(viewModel.availableFocalLengths, ["35 mm"])
+
+        // B 固有の値は混ざらない
+        XCTAssertFalse(viewModel.availableMakers.contains("Nikon"))
+        XCTAssertFalse(viewModel.availableCameras.contains("D850"))
+        XCTAssertFalse(viewModel.availableLenses.contains("AF-S 50mm f/1.8"))
+        XCTAssertFalse(viewModel.availableISOs.contains("6400"))
+    }
+
+    /// Catalog モードでは populateMetadataCache がスコープ分でキャッシュを丸ごと置換するため、
+    /// available* はキャッシュ全体の値を返す（リグレッション防止）。
+    func testAvailableOptions_CatalogMode_UsesWholeCache() {
+        let urlA = URL(fileURLWithPath: "/folderA/canon.jpg")
+        let urlB = URL(fileURLWithPath: "/folderB/nikon.jpg")
+
+        var metaA = ExifMetadata()
+        metaA.cameraMake = "Canon"
+        var metaB = ExifMetadata()
+        metaB.cameraMake = "Nikon"
+
+        viewModel.metadataCache[urlA] = metaA
+        viewModel.metadataCache[urlB] = metaB
+
+        // Catalog モードでは allFiles は参照されない
+        viewModel.allFiles = []
+        viewModel.appMode = .catalog
+        viewModel.selectedPhotosGroupID = nil
+
+        XCTAssertEqual(viewModel.availableMakers, ["Canon", "Nikon"])
+    }
 }

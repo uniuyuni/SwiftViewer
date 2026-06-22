@@ -100,7 +100,8 @@ struct ZoomableImageView: View {
     @State private var offset: CGSize = .zero
     @State private var dragOffset: CGSize = .zero
     @State private var isOffline: Bool = false
-    
+    @State private var noPreview: Bool = false
+
     // Zoom/Scroll State
     @State private var viewSize: CGSize = .zero
     @State private var isHovering: Bool = false
@@ -171,7 +172,19 @@ struct ZoomableImageView: View {
                         }
                     }
                 } else {
-                    if isOffline {
+                    if noPreview {
+                        VStack {
+                            Image(systemName: "eye.slash")
+                                .font(.largeTitle)
+                                .foregroundStyle(.secondary)
+                            Text("No Preview Available")
+                                .font(.title2)
+                                .foregroundStyle(.secondary)
+                            Text("This file has no preview image.")
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if isOffline {
                         VStack {
                             Image(systemName: "externaldrive.badge.xmark")
                                 .font(.largeTitle)
@@ -268,10 +281,14 @@ struct ZoomableImageView: View {
             )
             .clipped()
             .task(id: url) {
+                // Reset the no-preview flag for the newly selected file.
+                // (Do NOT clear `image` here to avoid flicker on normal navigation.)
+                self.noPreview = false
+
                 // 1. Check if RAW. If so, prioritize Embedded Preview for speed.
                 let ext = url.pathExtension.lowercased()
                 let isRaw = FileConstants.rawExtensions.contains(ext)
-                
+
                 if isRaw {
                     // Use ThumbnailGenerator (which uses QuickLook) to ensure correct rotation.
                     // Request a large size (screen size) for detail view.
@@ -311,22 +328,36 @@ struct ZoomableImageView: View {
                     }
                 }
                 
-                // 4. Offline: Try to load cached thumbnail
+                // 4. All decode/extract attempts failed. Distinguish two cases:
+                if FileManager.default.fileExists(atPath: url.path) {
+                    // File is present but no preview could be produced (corrupt/unsupported,
+                    // no embedded preview, etc.). Show a "no preview" message, not the previous image.
+                    self.image = nil
+                    self.isOffline = false
+                    self.noPreview = true
+                    return
+                }
+
+                // Genuinely offline (original missing): try cached thumbnail.
                 self.isOffline = true
+                self.noPreview = false
                 if let id = itemID {
                     // Try large preview first
                     if let preview = ThumbnailCacheService.shared.loadThumbnail(for: id, type: .preview) {
                         self.image = preview
                         print("DetailView: Loaded cached PREVIEW for offline file: \(url.lastPathComponent)")
-                    } 
+                    }
                     // Fallback to standard thumbnail
                     else if let cached = ThumbnailCacheService.shared.loadThumbnail(for: id, type: .thumbnail) {
                         self.image = cached
                         print("DetailView: Loaded cached thumbnail for offline file: \(url.lastPathComponent)")
                     } else {
+                        // No cache: clear so the previous image does not linger behind the offline message.
+                        self.image = nil
                         print("DetailView: No cached thumbnail found for offline file: \(url.lastPathComponent) (ID: \(id))")
                     }
                 } else {
+                    self.image = nil
                     print("DetailView: No itemID provided for offline file: \(url.lastPathComponent)")
                 }
             }
