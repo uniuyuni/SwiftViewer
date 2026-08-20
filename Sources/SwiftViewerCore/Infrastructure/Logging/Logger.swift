@@ -3,16 +3,22 @@ import Foundation
 class Logger {
     static let shared = Logger()
     
-    private let logFileURL: URL
+    private let logFileURL: URL?
     private let queue = DispatchQueue(label: "com.swiftviewer.logger", qos: .utility)
     
     private init() {
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        self.logFileURL = documents.appendingPathComponent("SwiftViewer_Debug.log")
-        
-        // Create file if not exists
-        if !FileManager.default.fileExists(atPath: logFileURL.path) {
-            try? "".write(to: logFileURL, atomically: true, encoding: .utf8)
+        guard DocumentLogConfiguration.isEnabled,
+              let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        else {
+            logFileURL = nil
+            return
+        }
+
+        let url = documents.appendingPathComponent("SwiftViewer_Debug.log")
+        logFileURL = url
+
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? "".write(to: url, atomically: true, encoding: .utf8)
         }
     }
     
@@ -23,8 +29,9 @@ class Logger {
             
             print(logMessage) // Also print to stdout
             
-            if let data = logMessage.data(using: .utf8) {
-                if let fileHandle = try? FileHandle(forWritingTo: self.logFileURL) {
+            if let logFileURL = self.logFileURL,
+               let data = logMessage.data(using: .utf8) {
+                if let fileHandle = try? FileHandle(forWritingTo: logFileURL) {
                     fileHandle.seekToEndOfFile()
                     fileHandle.write(data)
                     fileHandle.closeFile()
@@ -35,7 +42,8 @@ class Logger {
     
     func clear() {
         queue.async {
-            try? "".write(to: self.logFileURL, atomically: true, encoding: .utf8)
+            guard let logFileURL = self.logFileURL else { return }
+            try? "".write(to: logFileURL, atomically: true, encoding: .utf8)
         }
     }
 }

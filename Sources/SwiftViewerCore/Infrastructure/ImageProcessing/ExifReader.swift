@@ -47,7 +47,7 @@ class ExifReader {
     private init() {}
     
     private func log(_ message: String) {
-        // Use a fixed path in Documents for debugging
+        guard DocumentLogConfiguration.isEnabled else { return }
         guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
         let logFileURL = documents.appendingPathComponent("SwiftViewer_Log.txt")
         
